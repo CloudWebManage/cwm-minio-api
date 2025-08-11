@@ -53,10 +53,10 @@ async def detach_policy_from_user(policy_name, user_name):
 
 
 async def bucket_anonymous_set_download(bucket_name, exit_stack=None):
-    await mc_check_call('minio-mc', 'anonymous', 'set', 'download', f'{config.MINIO_MC_PROFILE}/{bucket_name}')
+    await mc_check_call('anonymous', 'set', 'download', f'{config.MINIO_MC_PROFILE}/{bucket_name}')
     if exit_stack:
         exit_stack.push_async_callback(bucket_anonymous_set_none, bucket_name)
 
 
 async def bucket_anonymous_set_none(bucket_name):
-    await mc_check_call('minio-mc', 'anonymous', 'set', 'none', f'{config.MINIO_MC_PROFILE}/{bucket_name}')
+    await mc_check_call('anonymous', 'set', 'none', f'{config.MINIO_MC_PROFILE}/{bucket_name}')
