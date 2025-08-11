@@ -24,3 +24,5 @@ jobs:
             ${{ env.IMAGE }}:${{ github.sha }}
           cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache-latest
           cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache-latest,mode=max
+          build-args: |
+            VERSION=${{ github.sha }}

@@ -17,3 +17,5 @@ DB_POOL_KWARGS = orjson.loads(os.getenv('DB_POOL_KWARGS_JSON', '{}'))
 
 MINIO_MC_BINARY = os.getenv('MINIO_MC_BINARY', 'mc')
 MINIO_MC_PROFILE = os.getenv('MINIO_MC_PROFILE', 'cwm')
+
+TENANT_INFO = orjson.loads(os.getenv('TENANT_INFO_JSON', '{}'))

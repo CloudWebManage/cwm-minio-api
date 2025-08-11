@@ -26,5 +26,7 @@ COPY migrations ./migrations
 COPY bin ./bin
 COPY cwm_minio_api ./cwm_minio_api
 RUN pip install --no-cache-dir --no-deps -e .
+ARG VERSION=docker-build
+RUN echo "VERSION = '${VERSION}'" > cwm_minio_api/version.py
 USER cwm-minio-api
 CMD ["./docker_entrypoint.sh"]
