@@ -55,7 +55,7 @@ async def get(instance_id, cur=None):
             await cur.execute('''
                 select count(*) as bucket_count from buckets where instance_id = %s
             ''', (instance_id,))
-            bucket_count = cur.fetchone()['bucket_count']
+            bucket_count = await cur.fetchone()['bucket_count']
             return {
                 'status': 'active',
                 'instance_id': row['id'],
