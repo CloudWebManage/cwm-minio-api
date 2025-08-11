@@ -121,6 +121,7 @@ async def update(instance_id, bucket_name, public):
             else:
                 await minio_api.bucket_anonymous_set_none(bucket_name)
             await conn.commit()
+            stack.pop_all()
         return await get(bucket_name, cur=cur)
 
 
