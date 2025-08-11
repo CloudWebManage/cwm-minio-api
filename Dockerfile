@@ -6,7 +6,6 @@ FROM minio/minio:${MINIO_VERSION} AS minio
 FROM python:${PYTHON_VERSION} AS build
 RUN curl -LsSf https://astral.sh/uv/${UV_VERSION}/install.sh | sh
 COPY pyproject.toml uv.lock /srv/cwm-minio-api/
-COPY cwm_minio_api /srv/cwm-minio-api/cwm_minio_api
 WORKDIR /srv/cwm-minio-api
 RUN ~/.local/bin/uv export --no-emit-project > requirements.txt
 
