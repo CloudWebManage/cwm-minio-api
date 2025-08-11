@@ -27,5 +27,6 @@ COPY cwm_minio_api ./cwm_minio_api
 RUN pip install --no-cache-dir --no-deps -e .
 ARG VERSION=docker-build
 RUN echo "VERSION = '${VERSION}'" > cwm_minio_api/version.py
+RUN mkdir .mc && chown cwm-minio-api .mc
 USER cwm-minio-api
 CMD ["./docker_entrypoint.sh"]
