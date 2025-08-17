@@ -170,3 +170,15 @@ async def get(bucket_name, cur=None):
                 'public': row['public'],
                 'access_key': row['access_key'],
             }
+
+
+async def list_buckets_prometheus_sd(targets):
+    async with db.connection_cursor() as (conn, cur):
+        await cur.execute('SELECT name FROM buckets')
+        buckets = []
+        async for row in cur:
+            buckets.append({
+                'targets': [t.strip() for t in targets.split(',') if t.strip()],
+                'labels': {'bucket': row['name']}
+            })
+        return buckets

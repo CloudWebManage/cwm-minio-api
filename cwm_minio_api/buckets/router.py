@@ -27,6 +27,11 @@ async def list_buckets(instance_id: str):
     return [bucket async for bucket in api.list_iterator(instance_id)]
 
 
+@router.get('/buckets/list_prometheus_sd', tags=['internal'])
+async def list_buckets_prometheus_sd(targets: str):
+    return await api.list_buckets_prometheus_sd(targets)
+
+
 @router.get('/buckets/get', tags=['buckets'])
 async def get(instance_id: str, bucket_name: str):
     bucket = await api.get(instance_id, bucket_name)
