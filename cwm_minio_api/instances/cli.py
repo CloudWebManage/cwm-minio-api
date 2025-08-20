@@ -12,7 +12,6 @@ async def main():
 
 @main.command()
 @click.argument('instance_id')
-@click.option('--max-size-gb', type=int, default=10)
 async def create(**kwargs):
     from .api import create
     common.json_print(await create(**kwargs))
@@ -20,11 +19,12 @@ async def create(**kwargs):
 
 @main.command()
 @click.argument('instance_id')
-@click.option('--max-size-gb', type=int)
+@click.option('--blocked', type=click.Choice(('true', 'false'), case_sensitive=False))
 async def update(**kwargs):
+    if kwargs['blocked'] is not None:
+        kwargs['blocked'] = kwargs['blocked'].lower() == 'true'
     from .api import update
     common.json_print(await update(**kwargs))
-
 
 
 @main.command()

@@ -55,7 +55,7 @@ def check_bucket_name(bucket_name):
     if re.match(ip_address_regex, bucket_name):
         raise ValueError('Bucket name cannot be an IP address')
     if '..' in bucket_name or '.-' in bucket_name or '-.' in bucket_name:
-        raise ValueError('Bucket name contains invalid characters')
+        raise ValueError("Bucket name contains invalid characters")
     valid_bucket_name_strict = r'^[a-z0-9][a-z0-9\.\-]{1,61}[a-z0-9]$'
     if not re.match(valid_bucket_name_strict, bucket_name):
         raise ValueError('Bucket name contains invalid characters')
@@ -68,24 +68,24 @@ def generate_key(length):
     return ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(length))
 
 
-async def create(instance_id, bucket_name, public):
+async def create(instance_id, bucket_name, public=False):
     check_bucket_name(bucket_name)
     async with db.connection_cursor() as (conn, cur):
-        bucket = await get(bucket_name, cur=cur)
+        await cur.execute('select 1 from buckets where name = %s', (bucket_name,))
+        if (await cur.fetchone()) is not None:
+            raise Exception('Bucket name already taken in this tenant')
+        bucket = await get(instance_id, bucket_name, cur=cur)
         if bucket is not None:
-            if bucket['instance_id'] == instance_id:
-                raise Exception('Bucket already exists in this instance')
-            else:
-                raise Exception('Bucket name already taken in this tenant')
+            raise Exception('Bucket already exists in this instance')
         instance = await get_instance(instance_id, cur=cur)
         if instance is None:
             raise Exception('Instance not found')
-        if instance['status'] != 'active':
-            raise Exception('Instance is not active')
+        if instance['blocked']:
+            raise Exception('Instance is blocked')
         access_key = bucket_name + ':' + generate_key(10)
         await cur.execute('''
-            INSERT INTO buckets (instance_id, name, public, access_key)
-            VALUES (%s, %s, %s, %s)
+            INSERT INTO buckets (instance_id, name, public, access_key, blocked)
+            VALUES (%s, %s, %s, %s, False)
         ''', (instance_id, bucket_name, public, access_key))
         async with AsyncExitStack() as stack:
             await minio_api.create_bucket(bucket_name, exit_stack=stack)
@@ -98,77 +98,82 @@ async def create(instance_id, bucket_name, public):
             await conn.commit()
             stack.pop_all()
         return {
-            **await get(bucket_name, cur=cur),
+            **await get(instance_id, bucket_name, cur=cur),
             'secret_key': secret_key
         }
 
 
-async def update(instance_id, bucket_name, public):
+async def update(instance_id, bucket_name, public=None, blocked=None):
     async with db.connection_cursor() as (conn, cur):
-        bucket = await get(bucket_name, cur=cur)
+        bucket = await get(instance_id, bucket_name, cur=cur)
         if bucket is None:
             raise Exception('Bucket not found')
-        if bucket['instance_id'] != instance_id:
-            raise Exception('Bucket does not belong to the specified instance')
+        old_public = bucket['public']
+        new_public = public if public is not None else old_public
+        old_blocked = bucket['blocked']
+        new_blocked = blocked if blocked is not None else old_blocked
         await cur.execute('''
             UPDATE buckets
-            SET public = %s
+            SET public = %s, blocked = %s
             WHERE instance_id = %s AND name = %s
-        ''', (public, instance_id, bucket_name))
+        ''', (new_public, new_blocked, instance_id, bucket_name))
         async with AsyncExitStack() as stack:
-            if public:
-                await minio_api.bucket_anonymous_set_download(bucket_name, exit_stack=stack)
-            else:
-                await minio_api.bucket_anonymous_set_none(bucket_name)
+            if old_public != new_public:
+                if new_public:
+                    await minio_api.bucket_anonymous_set_download(bucket_name, exit_stack=stack)
+                else:
+                    await minio_api.bucket_anonymous_set_none(bucket_name, exit_stack=stack)
+            if old_blocked != new_blocked:
+                if new_blocked:
+                    await minio_api.detach_policy_from_user(bucket_name, bucket['access_key'], exit_stack=stack)
+                else:
+                    await minio_api.attach_policy_to_user(bucket_name, bucket['access_key'], exit_stack=stack)
             await conn.commit()
             stack.pop_all()
-        return await get(bucket_name, cur=cur)
+        return await get(instance_id, bucket_name, cur=cur)
 
 
 async def delete(instance_id, bucket_name):
     async with db.connection_cursor() as (conn, cur):
-        bucket = await get(bucket_name, cur=cur)
+        bucket = await get(instance_id, bucket_name, cur=cur)
         if bucket is None:
             raise Exception('Bucket not found')
-        if bucket['instance_id'] != instance_id:
-            raise Exception('Bucket does not belong to the specified instance')
         await cur.execute('''
             DELETE FROM buckets
             WHERE instance_id = %s AND name = %s
         ''', (instance_id, bucket_name))
-        await minio_api.detach_policy_from_user(bucket_name, bucket['access_key'])
+        if not bucket['blocked']:
+            await minio_api.detach_policy_from_user(bucket_name, bucket['access_key'])
         await minio_api.delete_policy(bucket_name)
         await minio_api.delete_user(bucket['access_key'])
         await minio_api.delete_bucket(bucket_name)
         await conn.commit()
 
 
-async def list_iterator(instance_id):
-    async with db.connection_cursor() as (conn, cur):
-        if await get_instance(instance_id, cur=cur) is None:
-            raise Exception('Instance not found')
+async def list_iterator(instance_id, cur=None):
+    async with db.connection_cursor(cur) as (conn, cur):
         await cur.execute('SELECT name FROM buckets WHERE instance_id = %s', (instance_id,))
         async for row in cur:
             yield row['name']
 
 
-async def get(bucket_name, cur=None):
+async def get(instance_id, bucket_name, cur=None):
     async with db.connection_cursor(cur) as (conn, cur):
         await cur.execute('''
-            SELECT instance_id, public, access_key
+            SELECT public, access_key, blocked
             FROM buckets
-            WHERE name = %s
-        ''', (bucket_name,))
+            WHERE name = %s AND instance_id = %s
+        ''', (bucket_name,instance_id))
         row = await cur.fetchone()
         if row is None:
             return None
         else:
             return {
-                'status': 'active',
                 'bucket_name': bucket_name,
-                'instance_id': row['instance_id'],
+                'instance_id': instance_id,
                 'public': row['public'],
                 'access_key': row['access_key'],
+                'blocked': row['blocked']
             }
 
 

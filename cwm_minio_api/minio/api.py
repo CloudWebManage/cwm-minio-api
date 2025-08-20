@@ -1,11 +1,10 @@
 import tempfile
-import subprocess
 
-from .. import config
+from .. import config, common
 
 
 async def mc_check_call(*args):
-    subprocess.check_call([config.MINIO_MC_BINARY, *args])
+    await common.async_subprocess_check_call(config.MINIO_MC_BINARY, *args)
 
 
 async def create_bucket(name, exit_stack=None):
@@ -48,8 +47,10 @@ async def attach_policy_to_user(policy_name, user_name, exit_stack=None):
         exit_stack.push_async_callback(detach_policy_from_user, policy_name, user_name)
 
 
-async def detach_policy_from_user(policy_name, user_name):
+async def detach_policy_from_user(policy_name, user_name, exit_stack=None):
     await mc_check_call('admin', 'policy', 'detach', config.MINIO_MC_PROFILE, policy_name, '--user', user_name)
+    if exit_stack:
+        exit_stack.push_async_callback(attach_policy_to_user, policy_name, user_name)
 
 
 async def bucket_anonymous_set_download(bucket_name, exit_stack=None):
@@ -58,5 +59,7 @@ async def bucket_anonymous_set_download(bucket_name, exit_stack=None):
         exit_stack.push_async_callback(bucket_anonymous_set_none, bucket_name)
 
 
-async def bucket_anonymous_set_none(bucket_name):
+async def bucket_anonymous_set_none(bucket_name, exit_stack=None):
     await mc_check_call('anonymous', 'set', 'none', f'{config.MINIO_MC_PROFILE}/{bucket_name}')
+    if exit_stack:
+        exit_stack.push_async_callback(bucket_anonymous_set_download, bucket_name)

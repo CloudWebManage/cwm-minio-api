@@ -8,13 +8,13 @@ router = APIRouter()
 
 
 @router.get('/buckets/create', tags=['buckets'])
-async def create(instance_id: str, bucket_name: str, public: bool = False):
+async def create(instance_id: str, bucket_name: str, public: bool):
     return await api.create(instance_id, bucket_name, public)
 
 
 @router.get('/buckets/update', tags=['buckets'])
-async def update(instance_id: str, bucket_name: str, public: bool = False):
-    return await api.update(instance_id, bucket_name, public)
+async def update(instance_id: str, bucket_name: str, public: bool, blocked: bool):
+    return await api.update(instance_id, bucket_name, public, blocked)
 
 
 @router.get('/buckets/delete', tags=['buckets'])
@@ -38,4 +38,3 @@ async def get(instance_id: str, bucket_name: str):
     if bucket is None:
         return {'error': 'Bucket not found'}
     return bucket
-

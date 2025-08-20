@@ -20,6 +20,7 @@ Prerequisites:
 * Python 3.12
 * [uv](https://pypi.org/project/uv/)
 * [Migrate](https://github.com/golang-migrate/migrate/tree/master/cmd/migrate#installation)
+* Docker
 
 Install:
 
@@ -28,6 +29,12 @@ uv sync
 ```
 
 Set configuration values in `.env` file (See Configuration section above for details)
+
+Start the DB:
+
+```
+docker compose up -d db
+```
 
 Run the CLI:
 

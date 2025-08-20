@@ -6,14 +6,18 @@ from psycopg_pool import AsyncConnectionPool
 from . import config
 
 
-pool = AsyncConnectionPool(
-    conninfo=config.DB_CONNSTRING,
-    check=AsyncConnectionPool.check_connection,
-    **{
-        'open': False,
-        **config.DB_POOL_KWARGS
-    }
-)
+def get_async_connection_pool():
+    return AsyncConnectionPool(
+        conninfo=config.DB_CONNSTRING,
+        check=AsyncConnectionPool.check_connection,
+        **{
+            'open': False,
+            **config.DB_POOL_KWARGS
+        }
+    )
+
+
+pool = get_async_connection_pool()
 
 
 @asynccontextmanager

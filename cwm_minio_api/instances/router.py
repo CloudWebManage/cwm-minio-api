@@ -7,13 +7,13 @@ router = APIRouter()
 
 
 @router.get('/instances/create', tags=['instances'])
-async def create(instance_id: str, max_size_gb: int):
-    return await api.create(instance_id, max_size_gb)
+async def create(instance_id: str):
+    return await api.create(instance_id)
 
 
 @router.get('/instances/update', tags=['instances'])
-async def update(instance_id: str, max_size_gb: int):
-    return await api.update(instance_id, max_size_gb)
+async def update(instance_id: str, blocked: bool):
+    return await api.update(instance_id, blocked)
 
 
 @router.get('/instances/delete', tags=['instances'])

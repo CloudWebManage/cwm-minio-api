@@ -21,8 +21,13 @@ async def create(**kwargs):
 @main.command()
 @click.argument('instance_id')
 @click.argument('bucket_name')
-@click.option('--public', is_flag=True, default=False)
+@click.option('--public', type=click.Choice(('true', 'false'), case_sensitive=False))
+@click.option('--blocked', type=click.Choice(('true', 'false'), case_sensitive=False))
 async def update(**kwargs):
+    if kwargs['public'] is not None:
+        kwargs['public'] = kwargs['public'].lower() == 'true'
+    if kwargs['blocked'] is not None:
+        kwargs['blocked'] = kwargs['blocked'].lower() == 'true'
     from .api import update
     common.json_print(await update(**kwargs))
 
@@ -47,11 +52,8 @@ async def list_(**kwargs):
 
 
 @main.command()
+@click.argument('instance_id')
 @click.argument('bucket_name')
 async def get(**kwargs):
     from .api import get
     common.json_print(await get(**kwargs))
-
-
-from .reports import cli as reports_cli
-main.add_command(reports_cli.main, name='reports')

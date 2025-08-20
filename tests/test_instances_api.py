@@ -1,0 +1,33 @@
+import pytest
+
+from cwm_minio_api.instances import api as instances_api
+from cwm_minio_api.buckets import api as buckets_api
+
+
+async def test_crud(cwm_test_db):
+    instance_id = 'test_instance_1'
+    created_instance = await instances_api.create(instance_id)
+    assert created_instance == {
+        'instance_id': instance_id,
+        'blocked': False,
+        'num_buckets': 0
+    }
+    assert [i async for i in instances_api.list_iterator()] == [instance_id]
+    assert (await instances_api.get(instance_id)) == created_instance
+    updated_instance = await instances_api.update(instance_id, blocked=True)
+    assert updated_instance == {
+        **created_instance,
+        'blocked': True
+    }
+    bucket_name = 'test-bucket-1'
+    with pytest.raises(Exception, match='Instance is blocked'):
+        await buckets_api.create(instance_id, bucket_name)
+    await instances_api.update(instance_id, blocked=False)
+    await buckets_api.create(instance_id, bucket_name)
+    assert (await instances_api.get(instance_id)) == {
+        **updated_instance,
+        'blocked': False,
+        'num_buckets': 1
+    }
+    await instances_api.delete(instance_id)
+    assert [i async for i in instances_api.list_iterator()] == []
