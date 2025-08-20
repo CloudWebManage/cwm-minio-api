@@ -69,8 +69,8 @@ jobs:
       - name: install minio mc
         run: |
           docker run --rm -v /tmp:/tmp --entrypoint cp minio/minio:${MINIO_VERSION} /usr/bin/mc /tmp/mc &&\
-          mv /tmp/mc /usr/local/bin/mc &&\
-          chmod +x /usr/local/bin/mc
+          sudo cp /tmp/mc /usr/local/bin/mc &&\
+          sudo chmod +x /usr/local/bin/mc
       - name: run e2e tests
         env:
           CWM_MINIO_API_URL: ${{ secrets.CWM_MINIO_API_URL }}
