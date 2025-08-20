@@ -1,5 +1,6 @@
 import os
 import json
+import time
 from contextlib import AsyncExitStack
 
 import dotenv
@@ -14,6 +15,7 @@ dotenv.load_dotenv()
 CWM_MINIO_API_URL = os.getenv("CWM_MINIO_API_URL")
 CWM_MINIO_API_USERNAME = os.getenv("CWM_MINIO_API_USERNAME")
 CWM_MINIO_API_PASSWORD = os.getenv("CWM_MINIO_API_PASSWORD")
+CWM_MINIO_API_EXPECTED_VERSION = os.getenv("CWM_MINIO_API_EXPECTED_VERSION")
 
 
 async def cwm_minio_api(path, **params):
@@ -40,6 +42,17 @@ async def test():
         print('Skipping E2E Tests - env vars are not set')
         return
     print(f'Starting E2E Tests on {CWM_MINIO_API_URL}')
+    if CWM_MINIO_API_EXPECTED_VERSION:
+        start_time = time.time()
+        while True:
+            openapi = await cwm_minio_api('openapi.json')
+            if openapi['info']['version'] == CWM_MINIO_API_EXPECTED_VERSION:
+                print(f'API version {CWM_MINIO_API_EXPECTED_VERSION} is available')
+                break
+            if time.time() - start_time > 240:
+                raise Exception(f'API version {CWM_MINIO_API_EXPECTED_VERSION} is not available after 240 seconds')
+            print(f'Waiting for API version {CWM_MINIO_API_EXPECTED_VERSION} to be available, current version is {openapi["info"]["version"]}')
+            time.sleep(5)
     tenant_info = await cwm_minio_api('tenant/info')
     assert tenant_info.keys() == {'api_url', 'console_url', 'prometheus_url'}
     api_url = tenant_info['api_url']
