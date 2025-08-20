@@ -10,6 +10,7 @@ WORKDIR /srv/cwm-minio-api
 RUN ~/.local/bin/uv export --no-emit-project > requirements.txt
 
 FROM python:${PYTHON_VERSION}
+# These should match the versions in .github/workflows/ci.yaml
 ARG UV_VERSION=0.8.8
 ARG MIGRATE_VERSION=v4.18.3
 RUN curl -L https://github.com/golang-migrate/migrate/releases/download/${MIGRATE_VERSION}/migrate.linux-amd64.tar.gz | tar xvz &&\
