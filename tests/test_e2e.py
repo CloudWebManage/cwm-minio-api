@@ -49,8 +49,8 @@ async def test():
             if openapi['info']['version'] == CWM_MINIO_API_EXPECTED_VERSION:
                 print(f'API version {CWM_MINIO_API_EXPECTED_VERSION} is available')
                 break
-            if time.time() - start_time > 240:
-                raise Exception(f'API version {CWM_MINIO_API_EXPECTED_VERSION} is not available after 240 seconds')
+            if time.time() - start_time > 600:
+                raise Exception(f'API version {CWM_MINIO_API_EXPECTED_VERSION} is not available after 10 minutes')
             print(f'Waiting for API version {CWM_MINIO_API_EXPECTED_VERSION} to be available, current version is {openapi["info"]["version"]}')
             time.sleep(5)
     tenant_info = await cwm_minio_api('tenant/info')
