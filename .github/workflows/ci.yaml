@@ -62,8 +62,8 @@ jobs:
           cd cwm-worker-cluster
           echo 'cwmMinioApi:
             image: "ghcr.io/cloudwebmanage/cwm-minio-api:'${GITHUB_SHA}'"
-          ' > clusters/cwmc-eu-v3test/apps/minio-tenant/values.auto-updated.cwm-minio-api.yaml
-          git add clusters/cwmc-eu-v3test/apps/minio-tenant/values.auto-updated.cwm-minio-api.yaml
+          ' > clusters/cwmc-eu-objstoretest/apps/minio-tenant/values.auto-updated.cwm-minio-api.yaml
+          git add clusters/cwmc-eu-objstoretest/apps/minio-tenant/values.auto-updated.cwm-minio-api.yaml
           git commit -m "Update cwm-minio-api for cwmc-eu-v3test"
           git push origin main
       - name: install minio mc
