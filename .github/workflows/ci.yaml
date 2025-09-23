@@ -5,10 +5,10 @@ on:
       - main
 env:
   IMAGE: ghcr.io/cloudwebmanage/cwm-minio-api
-  # these should match the versions in Dockerfile
-  UV_VERSION: 0.8.8
-  MIGRATE_VERSION: v4.18.3
-  MINIO_VERSION: RELEASE.2025-07-23T15-54-02Z
+  UV_VERSION: "0.8.8"
+  MIGRATE_VERSION: "v4.18.3"
+  MINIO_VERSION: "RELEASE.2025-07-23T15-54-02Z"
+  PYTHON_VERSION: "3.12"
 jobs:
   ci:
     runs-on: ubuntu-latest
@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: ${{ env.PYTHON_VERSION }}
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
@@ -31,41 +31,22 @@ jobs:
           docker compose up -d db
           uv sync
           uv run pytest
-      - uses: docker/login-action@v3
+      - uses: CloudWebManage/cwm-iac/actions/docker-build-push@main
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/setup-buildx-action@v3
-      - id: docker_build
-        uses: docker/build-push-action@v6
-        with:
-          push: true
-          tags: |
-            ${{ env.IMAGE }}:latest
-            ${{ env.IMAGE }}:${{ github.sha }}
-          cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache-latest
-          cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache-latest,mode=max
-          build-args: |
+          image_suffix: cwm-minio-api
+          build_args: |
+            MINIO_VERSION=${{ env.MINIO_VERSION }}
+            PYTHON_VERSION=${{ env.PYTHON_VERSION }}
+            UV_VERSION=${{ env.UV_VERSION }}
+            MIGRATE_VERSION=${{ env.MIGRATE_VERSION }}
             VERSION=${{ github.sha }}
-      - name: update cwm-worker-cluster
-        env:
-          DEPLOY_KEY_B64: ${{ secrets.CWM_WORKER_CLUSTER_DEPLOY_KEY_B64 }}
-          GITHUB_SHA: ${{ github.sha }}
-        run: |
-          echo $DEPLOY_KEY_B64 | base64 -d > /tmp/deploy_key
-          chmod 600 /tmp/deploy_key
-          export GIT_SSH_COMMAND="ssh -i /tmp/deploy_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-          git config --global user.name "GitHub Actions"
-          git config --global user.email "actions@localhost"
-          git clone git@github.com:CloudWebManage/cwm-worker-cluster.git
-          cd cwm-worker-cluster
-          echo 'cwmMinioApi:
-            image: "ghcr.io/cloudwebmanage/cwm-minio-api:'${GITHUB_SHA}'"
-          ' > clusters/cwmc-eu-objstoretest/apps/minio-tenant/values.auto-updated.cwm-minio-api.yaml
-          git add clusters/cwmc-eu-objstoretest/apps/minio-tenant/values.auto-updated.cwm-minio-api.yaml
-          git commit -m "Update cwm-minio-api for cwmc-eu-v3test"
-          git push origin main
+          deploy_key_b64: ${{ secrets.CWM_WORKER_CLUSTER_DEPLOY_KEY_B64 }}
+          deploy_file_path: config/auto-updated/cwm-minio-api/api.yaml
+          deploy_content_prefix: |
+            cwmMinioApi:
+              api:
+                image:
+          deploy_commit_message: "Update cwm-minio-api/api"
       - name: install minio mc
         run: |
           docker run --rm -v /tmp:/tmp --entrypoint cp minio/minio:${MINIO_VERSION} /usr/bin/mc /tmp/mc &&\

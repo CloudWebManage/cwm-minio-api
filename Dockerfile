@@ -1,18 +1,21 @@
 ARG MINIO_VERSION=RELEASE.2025-07-23T15-54-02Z
 ARG PYTHON_VERSION=3.12
+ARG UV_VERSION=0.8.8
+ARG MIGRATE_VERSION=v4.18.3
+ARG VERSION=docker-build
 
 FROM minio/minio:${MINIO_VERSION} AS minio
 
 FROM python:${PYTHON_VERSION} AS build
+ARG UV_VERSION
 RUN curl -LsSf https://astral.sh/uv/${UV_VERSION}/install.sh | sh
 COPY pyproject.toml uv.lock /srv/cwm-minio-api/
 WORKDIR /srv/cwm-minio-api
 RUN ~/.local/bin/uv export --no-emit-project > requirements.txt
 
 FROM python:${PYTHON_VERSION}
-# These should match the versions in .github/workflows/ci.yaml
-ARG UV_VERSION=0.8.8
-ARG MIGRATE_VERSION=v4.18.3
+ARG MIGRATE_VERSION
+ARG VERSION
 RUN curl -L https://github.com/golang-migrate/migrate/releases/download/${MIGRATE_VERSION}/migrate.linux-amd64.tar.gz | tar xvz &&\
     mv migrate /usr/local/bin/migrate &&\
     chmod +x /usr/local/bin/migrate
@@ -26,7 +29,6 @@ COPY migrations ./migrations
 COPY bin ./bin
 COPY cwm_minio_api ./cwm_minio_api
 RUN pip install --no-cache-dir --no-deps -e .
-ARG VERSION=docker-build
 RUN echo "VERSION = '${VERSION}'" > cwm_minio_api/version.py
 RUN mkdir .mc && chown cwm-minio-api .mc
 USER cwm-minio-api
