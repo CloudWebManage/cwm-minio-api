@@ -1,8 +1,6 @@
 name: CI
 on:
   push:
-    branches:
-      - main
 env:
   IMAGE: ghcr.io/cloudwebmanage/cwm-minio-api
   UV_VERSION: "0.8.8"
@@ -48,11 +46,13 @@ jobs:
                 image:
           deploy_commit_message: "Update cwm-minio-api/api"
       - name: install minio mc
+        if: ${{ github.ref == 'refs/heads/main' }}
         run: |
           docker run --rm -v /tmp:/tmp --entrypoint cp minio/minio:${MINIO_VERSION} /usr/bin/mc /tmp/mc &&\
           sudo cp /tmp/mc /usr/local/bin/mc &&\
           sudo chmod +x /usr/local/bin/mc
       - name: run e2e tests
+        if: ${{ github.ref == 'refs/heads/main' }}
         env:
           CWM_MINIO_API_URL: ${{ secrets.CWM_MINIO_API_URL }}
           CWM_MINIO_API_USERNAME: ${{ secrets.CWM_MINIO_API_USERNAME }}
