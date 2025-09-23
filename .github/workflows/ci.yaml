@@ -40,10 +40,10 @@ jobs:
             VERSION=${{ github.sha }}
           deploy_key_b64: ${{ secrets.CWM_WORKER_CLUSTER_DEPLOY_KEY_B64 }}
           deploy_file_path: config/auto-updated/cwm-minio-api/api.yaml
-          deploy_content_prefix: |
+          deploy_content_template: |
             cwmMinioApi:
               api:
-                image:
+                image: "__IMAGE__"
           deploy_commit_message: "Update cwm-minio-api/api"
       - name: install minio mc
         if: ${{ github.ref == 'refs/heads/main' }}
