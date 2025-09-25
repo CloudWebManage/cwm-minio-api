@@ -45,6 +45,18 @@ jobs:
               api:
                 image: "__IMAGE__"
           deploy_commit_message: "Update cwm-minio-api/api"
+          wait_for_deployment_json: |
+            {
+              "wait-for": [
+                {
+                  "type": "openapi_version",
+                  "url": "${{ secrets.CWM_MINIO_API_URL }}",
+                  "username": "${{ secrets.CWM_MINIO_API_USERNAME }}",
+                  "password": "${{ secrets.CWM_MINIO_API_PASSWORD }}",
+                  "expected_version": "${{ github.sha }}"
+                }
+              ]
+            }
       - name: install minio mc
         if: ${{ github.ref == 'refs/heads/main' }}
         run: |
@@ -57,6 +69,5 @@ jobs:
           CWM_MINIO_API_URL: ${{ secrets.CWM_MINIO_API_URL }}
           CWM_MINIO_API_USERNAME: ${{ secrets.CWM_MINIO_API_USERNAME }}
           CWM_MINIO_API_PASSWORD: ${{ secrets.CWM_MINIO_API_PASSWORD }}
-          CWM_MINIO_API_EXPECTED_VERSION: ${{ github.sha }}
         run: |
           uv run pytest tests/test_e2e.py -s
