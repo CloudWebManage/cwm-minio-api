@@ -69,4 +69,5 @@ jobs:
           CWM_MINIO_API_USERNAME: ${{ secrets.CWM_MINIO_API_USERNAME }}
           CWM_MINIO_API_PASSWORD: ${{ secrets.CWM_MINIO_API_PASSWORD }}
         run: |
+          uv sync
           uv run pytest tests/test_e2e.py -s
