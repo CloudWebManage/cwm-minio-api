@@ -24,13 +24,12 @@ jobs:
           curl -L https://github.com/golang-migrate/migrate/releases/download/${MIGRATE_VERSION}/migrate.linux-amd64.tar.gz | tar xvz &&\
           mv migrate /usr/local/bin/migrate &&\
           chmod +x /usr/local/bin/migrate
-      - name: run tests
-        run: |
-          docker compose up -d db
-          uv sync
-          uv run pytest
       - uses: CloudWebManage/cwm-iac/actions/docker-build-push@main
         with:
+          test_script: |
+            docker compose up -d db
+            uv sync
+            uv run pytest
           image_suffix: cwm-minio-api
           build_args: |
             MINIO_VERSION=${{ env.MINIO_VERSION }}
