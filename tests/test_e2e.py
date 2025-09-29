@@ -17,8 +17,9 @@ CWM_MINIO_API_USERNAME = os.getenv("CWM_MINIO_API_USERNAME")
 CWM_MINIO_API_PASSWORD = os.getenv("CWM_MINIO_API_PASSWORD")
 
 
-async def cwm_minio_api(path, **params):
-    res = requests.get(
+async def cwm_minio_api(path, method="get", **params):
+    res = requests.request(
+        method,
         os.path.join(CWM_MINIO_API_URL, path),
         params=params,
         auth=(CWM_MINIO_API_USERNAME, CWM_MINIO_API_PASSWORD),
@@ -53,26 +54,26 @@ async def test():
     instance_id = '__cwm_e2e_test_instance__'
     print(f'Instance ID: {instance_id}')
     async with AsyncExitStack() as exit_stack:
-        created_instance = await cwm_minio_api('instances/create', instance_id=instance_id)
-        exit_stack.push_async_callback(cwm_minio_api, 'instances/delete', instance_id=instance_id)
-        assert created_instance == {
-            'instance_id': instance_id,
-            'blocked': False,
-            'num_buckets': 0,
-        }
+        created_instance = await cwm_minio_api('instances/create', method='post', instance_id=instance_id)
+        exit_stack.push_async_callback(cwm_minio_api, 'instances/delete', method='delete', instance_id=instance_id)
+        assert created_instance.keys() == {'instance_id', 'blocked', 'num_buckets', 'access_key', 'secret_key'}
+        assert created_instance['instance_id'] == instance_id
+        assert created_instance['blocked'] == False
+        assert created_instance['num_buckets'] == 0
+        instance_access_key = created_instance['access_key']
+        assert len(instance_access_key) == 24
+        instance_secret_key = created_instance.pop('secret_key')
+        assert len(instance_secret_key) == 40
         assert instance_id in (await cwm_minio_api('instances/list'))
         assert (await cwm_minio_api('instances/get', instance_id=instance_id)) == created_instance
         bucket_name = 'cwm-e2e-test-bucket'
-        created_bucket = await cwm_minio_api('buckets/create', instance_id=instance_id, bucket_name=bucket_name, public=False)
-        assert created_bucket.keys() == {'access_key', 'blocked', 'bucket_name', 'instance_id', 'public', 'secret_key'}
+        created_bucket = await cwm_minio_api('buckets/create', method='post', instance_id=instance_id, bucket_name=bucket_name, public=False)
+        assert created_bucket.keys() == {'blocked', 'bucket_name', 'instance_id', 'public'}
         assert created_bucket['blocked'] is False
         assert created_bucket['bucket_name'] == bucket_name
         assert created_bucket['instance_id'] == instance_id
         assert created_bucket['public'] is False
-        assert created_bucket['access_key'].startswith(f'{bucket_name}:')
-        assert len(created_bucket['access_key']) == len(bucket_name) + 11
-        assert len(created_bucket['secret_key']) == 40
-        await async_subprocess_check_call(MINIO_MC_BINARY, 'alias', 'set', 'cwme2etest', api_url, created_bucket['access_key'], created_bucket['secret_key'])
+        await async_subprocess_check_call(MINIO_MC_BINARY, 'alias', 'set', 'cwme2etest', api_url, instance_access_key, instance_secret_key)
         exit_stack.push_async_callback(async_subprocess_check_call, MINIO_MC_BINARY, 'alias', 'rm', 'cwme2etest')
         ls_buckets = parse_json_lines(await async_subprocess_check_output(MINIO_MC_BINARY, 'ls', 'cwme2etest', '--json'))
         assert len(ls_buckets) == 1
@@ -91,10 +92,10 @@ async def test():
             assert readme_content == f.read().strip()
         res = requests.get(os.path.join(api_url, bucket_name, 'README.md'))
         assert res.status_code == 403
-        await cwm_minio_api('buckets/update', instance_id=instance_id, bucket_name=bucket_name, public=True, blocked=False)
+        await cwm_minio_api('buckets/update', method='put', instance_id=instance_id, bucket_name=bucket_name, public=True, blocked=False)
         res = requests.get(os.path.join(api_url, bucket_name, 'README.md'))
         assert res.status_code == 200
         assert res.text.strip() == readme_content.strip()
-        await cwm_minio_api('buckets/update', instance_id=instance_id, bucket_name=bucket_name, public=False, blocked=True)
+        await cwm_minio_api('buckets/update', method='put', instance_id=instance_id, bucket_name=bucket_name, public=False, blocked=True)
         status, _ = await async_subprocess_status_output(MINIO_MC_BINARY, 'ls', 'cwme2etest', '--json')
         assert status == 1

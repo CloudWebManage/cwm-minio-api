@@ -31,5 +31,7 @@ async def test_crud(cwm_test_db):
         'blocked': False,
         'num_buckets': 1
     }
+    bucket_access_key = (await buckets_api.credentials_create(instance_id, bucket_name, read=True, write=True, delete=True))['access_key']
+    assert [c['access_key'] async for c in buckets_api.credentials_list_iterator(instance_id, bucket_name)] == [bucket_access_key]
     await instances_api.delete(instance_id)
     assert [i async for i in instances_api.list_iterator()] == []

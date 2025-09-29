@@ -131,6 +131,13 @@ async def update(instance_id, bucket_name, public=False, blocked=False):
                 await minio_api.bucket_anonymous_set_download(bucket_name, exit_stack=stack)
             elif not public and bucket['public']:
                 await minio_api.bucket_anonymous_set_none(bucket_name, exit_stack=stack)
+            if blocked and not bucket['blocked']:
+                await update_instance_access_key(bucket_name, instance['access_key'], None)
+                credentials = [c async for c in credentials_list_iterator(instance_id, bucket_name, cur=cur)]
+                await common.async_run_batches([
+                    credentials_delete(instance_id, bucket_name, c['access_key'])
+                    for c in credentials
+                ])
             await conn.commit()
             stack.pop_all()
         return await get(instance_id, bucket_name, cur=cur)
@@ -285,3 +292,19 @@ async def credentials_delete(instance_id, bucket_name, access_key):
             await minio_api.delete_user(access_key)
             await conn.commit()
             stack.pop_all()
+
+
+async def credentials_list_iterator(instance_id, bucket_name, cur=None):
+    async with db.connection_cursor(cur) as (conn, cur):
+        await cur.execute('''
+            SELECT access_key, permission_read, permission_write, permission_delete
+            FROM bucket_credentials
+            WHERE instance_id = %s AND bucket_name = %s
+        ''', (instance_id, bucket_name))
+        async for row in cur:
+            yield {
+                'access_key': row['access_key'],
+                'permission_read': row['permission_read'],
+                'permission_write': row['permission_write'],
+                'permission_delete': row['permission_delete'],
+            }

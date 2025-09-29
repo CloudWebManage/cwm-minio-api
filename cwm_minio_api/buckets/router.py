@@ -90,3 +90,16 @@ async def credentials_create(instance_id: str, bucket_name: str, read: bool, wri
 @router.delete('/buckets/credentials_delete', tags=['buckets'])
 async def credentials_delete(instance_id: str, bucket_name: str, access_key: str):
     return common.cli_print_json(await api.credentials_delete(instance_id, bucket_name, access_key))
+
+
+@main.command()
+@click.argument('instance_id')
+@click.argument('bucket_name')
+@router.get('/buckets/credentials_list', tags=['buckets'])
+async def credentials_list(instance_id: str, bucket_name: str):
+    creds = [cred async for cred in api.credentials_list_iterator(instance_id, bucket_name)]
+    if common.is_cli():
+        common.cli_print_json(creds)
+        return click.echo(f'Total credentials: {len(creds)}', err=True)
+    else:
+        return creds
