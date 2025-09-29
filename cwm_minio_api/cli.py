@@ -4,7 +4,7 @@ import importlib
 
 import asyncclick as click
 
-from . import config
+from . import config, access_keys
 
 
 logging.basicConfig(
@@ -22,7 +22,12 @@ for submodule in [
     'buckets',
     'instances',
 ]:
-    main.add_command(getattr(importlib.import_module(f'.{submodule}.cli', __package__), 'main'), name=submodule.replace('_', '-'))
+    main.add_command(getattr(importlib.import_module(f'.{submodule}.router', __package__), 'main'), name=submodule.replace('_', '-'))
+
+
+@main.command()
+async def get_access_key():
+    click.echo(await access_keys.get_access_key())
 
 
 if __name__ == '__main__':

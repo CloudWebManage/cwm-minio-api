@@ -1,16 +1,13 @@
-import re
-import string
-import secrets
 from textwrap import dedent
 from contextlib import AsyncExitStack
 
-from .. import db
+from .. import db, common, access_keys
 from ..instances.api import get as get_instance
 from ..minio import api as minio_api
 
 
 # https://docs.min.io/community/minio-object-store/administration/identity-access-management/policy-based-access-control.html
-BUCKET_POLICY_TEMPLATE = dedent('''
+BUCKET_POLICY_READ_TEMPLATE = dedent('''
 {
    "Version" : "2012-10-17",
    "Statement" : [
@@ -19,16 +16,30 @@ BUCKET_POLICY_TEMPLATE = dedent('''
          "Action" : [
             "s3:GetBucketLocation",
             "s3:ListAllMyBuckets",
-            "s3:DeleteObject",
             "s3:GetObject",
             "s3:GetObjectAttributes",
             "s3:GetObjectVersionAttributes",
-            "s3:RestoreObject",
             "s3:ListBucket",
+            "s3:GetObjectTagging"
+        ],
+         "Resource": [
+            "arn:aws:s3:::__BUCKET_NAME__",
+            "arn:aws:s3:::__BUCKET_NAME__/*"
+        ]
+      }
+   ]
+}
+''')
+BUCKET_POLICY_WRITE_TEMPLATE = dedent('''
+{
+   "Version" : "2012-10-17",
+   "Statement" : [
+      {
+         "Effect" : "Allow",
+         "Action" : [
+            "s3:RestoreObject",
             "s3:PutObject",
             "s3:PutObjectTagging",
-            "s3:GetObjectTagging",
-            "s3:DeleteObjectTagging",
             "s3:AbortMultipartUpload",
             "s3:ListMultipartUploadParts",
             "s3:ListBucketMultipartUploads"
@@ -41,113 +52,136 @@ BUCKET_POLICY_TEMPLATE = dedent('''
    ]
 }
 ''')
-
-
-def check_bucket_name(bucket_name):
-    # based on https://github.com/minio/minio-go/blob/54af66a15eeca47d177eac8162376006485d7ae7/pkg/s3utils/utils.go#L348
-    if not bucket_name or not bucket_name.strip():
-        raise ValueError('Bucket name cannot be empty')
-    if len(bucket_name) < 3:
-        raise ValueError('Bucket name cannot be shorter than 3 characters')
-    if len(bucket_name) > 63:
-        raise ValueError('Bucket name cannot be longer than 63 characters')
-    ip_address_regex = r'^(\d+\.){3}\d+$'
-    if re.match(ip_address_regex, bucket_name):
-        raise ValueError('Bucket name cannot be an IP address')
-    if '..' in bucket_name or '.-' in bucket_name or '-.' in bucket_name:
-        raise ValueError("Bucket name contains invalid characters")
-    valid_bucket_name_strict = r'^[a-z0-9][a-z0-9\.\-]{1,61}[a-z0-9]$'
-    if not re.match(valid_bucket_name_strict, bucket_name):
-        raise ValueError('Bucket name contains invalid characters')
-    valid_bucket_name = r'^[A-Za-z0-9][A-Za-z0-9\.\-\_\:]{1,61}[A-Za-z0-9]$'
-    if not re.match(valid_bucket_name, bucket_name):
-        raise ValueError('Bucket name contains invalid characters')
-
-
-def generate_key(length):
-    return ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(length))
+BUCKET_POLICY_DELETE_TEMPLATE = dedent('''
+{
+   "Version" : "2012-10-17",
+   "Statement" : [
+      {
+         "Effect" : "Allow",
+         "Action" : [
+            "s3:DeleteObject",
+            "s3:DeleteObjectTagging"
+        ],
+         "Resource": [
+            "arn:aws:s3:::__BUCKET_NAME__",
+            "arn:aws:s3:::__BUCKET_NAME__/*"
+        ]
+      }
+   ]
+}
+''')
 
 
 async def create(instance_id, bucket_name, public=False):
-    check_bucket_name(bucket_name)
+    common.check_bucket_name(bucket_name)
     async with db.connection_cursor() as (conn, cur):
-        await cur.execute('select 1 from buckets where name = %s', (bucket_name,))
-        if (await cur.fetchone()) is not None:
-            raise Exception('Bucket name already taken in this tenant')
-        bucket = await get(instance_id, bucket_name, cur=cur)
-        if bucket is not None:
-            raise Exception('Bucket already exists in this instance')
         instance = await get_instance(instance_id, cur=cur)
         if instance is None:
             raise Exception('Instance not found')
         if instance['blocked']:
             raise Exception('Instance is blocked')
-        access_key = bucket_name + ':' + generate_key(10)
         await cur.execute('''
-            INSERT INTO buckets (instance_id, name, public, access_key, blocked)
-            VALUES (%s, %s, %s, %s, False)
-        ''', (instance_id, bucket_name, public, access_key))
-        async with AsyncExitStack() as stack:
-            await minio_api.create_bucket(bucket_name, exit_stack=stack)
-            secret_key = generate_key(40)
-            await minio_api.create_user(access_key, secret_key, exit_stack=stack)
-            await minio_api.create_policy(bucket_name, BUCKET_POLICY_TEMPLATE.replace('__BUCKET_NAME__', bucket_name), exit_stack=stack)
-            await minio_api.attach_policy_to_user(bucket_name, access_key, exit_stack=stack)
+            INSERT INTO buckets (instance_id, name, public, blocked)
+            VALUES (%s, %s, %s, False)
+            ON CONFLICT DO NOTHING
+            RETURNING name
+        ''', (instance_id, bucket_name, public))
+        assert await cur.fetchone(), 'Bucket already exists'
+        async with AsyncExitStack() as exit_stack:
+            await minio_api.create_bucket(bucket_name, exit_stack=exit_stack)
             if public:
-                await minio_api.bucket_anonymous_set_download(bucket_name, exit_stack=stack)
+                await minio_api.bucket_anonymous_set_download(bucket_name, exit_stack=exit_stack)
+            await common.async_run_batches([
+                minio_api.create_policy(policy, template.replace('__BUCKET_NAME__', bucket_name), exit_stack=exit_stack)
+                for policy, template in [
+                    (f'{bucket_name}_read', BUCKET_POLICY_READ_TEMPLATE),
+                    (f'{bucket_name}_write', BUCKET_POLICY_WRITE_TEMPLATE),
+                    (f'{bucket_name}_delete', BUCKET_POLICY_DELETE_TEMPLATE),
+                ]
+            ])
+            instance_access_key = instance['access_key']
+            await common.async_run_batches([
+                minio_api.attach_policy_to_user(policy, instance_access_key, exit_stack=exit_stack)
+                for policy in [
+                    f'{bucket_name}_read',
+                    f'{bucket_name}_write',
+                    f'{bucket_name}_delete',
+                ]
+            ])
             await conn.commit()
-            stack.pop_all()
-        return {
-            **await get(instance_id, bucket_name, cur=cur),
-            'secret_key': secret_key
-        }
+            exit_stack.pop_all()
+        return await get(instance_id, bucket_name, cur=cur)
 
 
-async def update(instance_id, bucket_name, public=None, blocked=None):
+async def update(instance_id, bucket_name, public=False, blocked=False):
     async with db.connection_cursor() as (conn, cur):
+        instance = await get_instance(instance_id, cur=cur)
+        if instance is None:
+            raise Exception('Instance not found')
         bucket = await get(instance_id, bucket_name, cur=cur)
         if bucket is None:
             raise Exception('Bucket not found')
-        old_public = bucket['public']
-        new_public = public if public is not None else old_public
-        old_blocked = bucket['blocked']
-        new_blocked = blocked if blocked is not None else old_blocked
         await cur.execute('''
             UPDATE buckets
             SET public = %s, blocked = %s
             WHERE instance_id = %s AND name = %s
-        ''', (new_public, new_blocked, instance_id, bucket_name))
+        ''', (public, blocked, instance_id, bucket_name))
         async with AsyncExitStack() as stack:
-            if old_public != new_public:
-                if new_public:
-                    await minio_api.bucket_anonymous_set_download(bucket_name, exit_stack=stack)
-                else:
-                    await minio_api.bucket_anonymous_set_none(bucket_name, exit_stack=stack)
-            if old_blocked != new_blocked:
-                if new_blocked:
-                    await minio_api.detach_policy_from_user(bucket_name, bucket['access_key'], exit_stack=stack)
-                else:
-                    await minio_api.attach_policy_to_user(bucket_name, bucket['access_key'], exit_stack=stack)
+            if public and not bucket['public']:
+                await minio_api.bucket_anonymous_set_download(bucket_name, exit_stack=stack)
+            elif not public and bucket['public']:
+                await minio_api.bucket_anonymous_set_none(bucket_name, exit_stack=stack)
             await conn.commit()
             stack.pop_all()
         return await get(instance_id, bucket_name, cur=cur)
 
 
+async def update_instance_access_key(bucket_name, old_access_key, new_access_key):
+    policies = [
+        f'{bucket_name}_read',
+        f'{bucket_name}_write',
+        f'{bucket_name}_delete',
+    ]
+    async with AsyncExitStack() as stack:
+        tasks = []
+        tasks.extend([
+            minio_api.detach_policy_from_user(policy, old_access_key, exit_stack=stack)
+            for policy in policies
+        ])
+        if new_access_key:
+            tasks.extend([
+                minio_api.attach_policy_to_user(policy, new_access_key, exit_stack=stack)
+                for policy in policies
+            ])
+        await common.async_run_batches(tasks)
+        stack.pop_all()
+
+
 async def delete(instance_id, bucket_name):
     async with db.connection_cursor() as (conn, cur):
+        instance = await get_instance(instance_id, cur=cur)
+        if instance is None:
+            raise Exception('Instance not found')
         bucket = await get(instance_id, bucket_name, cur=cur)
         if bucket is None:
             raise Exception('Bucket not found')
-        await cur.execute('''
-            DELETE FROM buckets
-            WHERE instance_id = %s AND name = %s
-        ''', (instance_id, bucket_name))
-        if not bucket['blocked']:
-            await minio_api.detach_policy_from_user(bucket_name, bucket['access_key'])
-        await minio_api.delete_policy(bucket_name)
-        await minio_api.delete_user(bucket['access_key'])
-        await minio_api.delete_bucket(bucket_name)
-        await conn.commit()
+        async with AsyncExitStack() as stack:
+            await cur.execute('''
+                DELETE FROM buckets
+                WHERE instance_id = %s AND name = %s
+            ''', (instance_id, bucket_name))
+            await update_instance_access_key(bucket_name, instance['access_key'], None)
+            await common.async_run_batches([
+                minio_api.delete_policy(policy)
+                for policy in [
+                    f'{bucket_name}_read',
+                    f'{bucket_name}_write',
+                    f'{bucket_name}_delete',
+                ]
+            ])
+            await minio_api.delete_bucket(bucket_name)
+            await conn.commit()
+            stack.pop_all()
 
 
 async def list_iterator(instance_id, cur=None):
@@ -160,7 +194,7 @@ async def list_iterator(instance_id, cur=None):
 async def get(instance_id, bucket_name, cur=None):
     async with db.connection_cursor(cur) as (conn, cur):
         await cur.execute('''
-            SELECT public, access_key, blocked
+            SELECT public, blocked
             FROM buckets
             WHERE name = %s AND instance_id = %s
         ''', (bucket_name,instance_id))
@@ -172,7 +206,6 @@ async def get(instance_id, bucket_name, cur=None):
                 'bucket_name': bucket_name,
                 'instance_id': instance_id,
                 'public': row['public'],
-                'access_key': row['access_key'],
                 'blocked': row['blocked']
             }
 
@@ -187,3 +220,68 @@ async def list_buckets_prometheus_sd(targets):
                 'labels': {'bucket': row['name']}
             })
         return buckets
+
+
+async def credentials_create(instance_id, bucket_name, read, write, delete):
+    if not any([read, write, delete]):
+        raise Exception('At least one permission must be specified')
+    bucket = await get(instance_id, bucket_name)
+    if bucket is None:
+        raise Exception('Bucket not found')
+    if bucket['blocked']:
+        raise Exception('Bucket is blocked')
+    async with db.connection_cursor() as (conn, cur):
+        async with AsyncExitStack() as exit_stack:
+            access_key = await access_keys.get_access_key(exit_stack)
+            secret_key = common.generate_key(40)
+            await cur.execute('''
+                INSERT INTO bucket_credentials (instance_id, bucket_name, access_key, permission_read, permission_write, permission_delete)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            ''', (instance_id, bucket_name, access_key, read, write, delete))
+            await minio_api.create_user(access_key, secret_key, exit_stack=exit_stack)
+            policies = []
+            if read:
+                policies.append(f'{bucket_name}_read')
+            if write:
+                policies.append(f'{bucket_name}_write')
+            if delete:
+                policies.append(f'{bucket_name}_delete')
+            await common.async_run_batches([
+                minio_api.attach_policy_to_user(policy, access_key, exit_stack=exit_stack)
+                for policy in policies
+            ])
+            await conn.commit()
+            exit_stack.pop_all()
+    return {
+        'access_key': access_key,
+        'secret_key': secret_key,
+    }
+
+
+async def credentials_delete(instance_id, bucket_name, access_key):
+    async with db.connection_cursor() as (conn, cur):
+        bucket = await get(instance_id, bucket_name, cur=cur)
+        if bucket is None:
+            raise Exception('Bucket not found')
+        async with AsyncExitStack() as stack:
+            await cur.execute('''
+                SELECT 1 from bucket_credentials
+                WHERE instance_id = %s AND bucket_name = %s AND access_key = %s
+            ''', (instance_id, bucket_name, access_key))
+            if await cur.fetchone() is None:
+                raise Exception('Credentials not found')
+            await cur.execute('''
+                DELETE FROM bucket_credentials
+                WHERE instance_id = %s AND bucket_name = %s AND access_key = %s
+            ''', (instance_id, bucket_name, access_key))
+            await common.async_run_batches([
+                minio_api.detach_policy_from_user(policy, access_key, exit_stack=stack)
+                for policy in [
+                    f'{bucket_name}_read',
+                    f'{bucket_name}_write',
+                    f'{bucket_name}_delete',
+                ]
+            ])
+            await minio_api.delete_user(access_key)
+            await conn.commit()
+            stack.pop_all()

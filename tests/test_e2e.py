@@ -3,6 +3,7 @@ import json
 from contextlib import AsyncExitStack
 
 import dotenv
+import pytest
 import requests
 
 from cwm_minio_api.common import async_subprocess_check_call, async_subprocess_check_output, async_subprocess_status_output
@@ -35,6 +36,7 @@ def parse_json_lines(output):
     return lines
 
 
+@pytest.mark.skipif(os.getenv("E2E") != 'yes', reason="E2E tests are disabled")
 async def test():
     if not CWM_MINIO_API_URL or not CWM_MINIO_API_USERNAME or not CWM_MINIO_API_PASSWORD:
         print('Skipping E2E Tests - env vars are not set')

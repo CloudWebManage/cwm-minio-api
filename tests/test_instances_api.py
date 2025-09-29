@@ -7,11 +7,13 @@ from cwm_minio_api.buckets import api as buckets_api
 async def test_crud(cwm_test_db):
     instance_id = 'test_instance_1'
     created_instance = await instances_api.create(instance_id)
-    assert created_instance == {
-        'instance_id': instance_id,
-        'blocked': False,
-        'num_buckets': 0
-    }
+    assert created_instance.keys() == {'instance_id', 'blocked', 'num_buckets', 'access_key', 'secret_key'}
+    assert created_instance['instance_id'] == instance_id
+    assert created_instance['blocked'] is False
+    assert created_instance['num_buckets'] == 0
+    assert len(created_instance['access_key']) == 24
+    secret_key = created_instance.pop('secret_key')
+    assert len(secret_key) == 40
     assert [i async for i in instances_api.list_iterator()] == [instance_id]
     assert (await instances_api.get(instance_id)) == created_instance
     updated_instance = await instances_api.update(instance_id, blocked=True)

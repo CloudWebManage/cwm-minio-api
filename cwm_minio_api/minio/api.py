@@ -17,6 +17,14 @@ async def delete_bucket(name):
     await mc_check_call('rb', f'{config.MINIO_MC_PROFILE}/{name}', '--force')
 
 
+async def bucket_exists(name):
+    try:
+        await mc_check_call('ls', f'{config.MINIO_MC_PROFILE}/{name}')
+        return True
+    except Exception:
+        return False
+
+
 async def create_policy(name, policy_json, exit_stack=None):
     with tempfile.NamedTemporaryFile() as policy_file:
         policy_file.write(policy_json.encode())
