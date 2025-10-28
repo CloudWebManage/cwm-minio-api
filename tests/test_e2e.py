@@ -44,7 +44,7 @@ async def test():
         return
     print(f'Starting E2E Tests on {CWM_MINIO_API_URL}')
     tenant_info = await cwm_minio_api('tenant/info')
-    assert tenant_info.keys() == {'api_url', 'console_url', 'prometheus_url'}
+    assert tenant_info.keys() == {'api_url', 'bucket_api_url', 'console_url', 'prometheus_url'}
     api_url = tenant_info['api_url']
     console_url = tenant_info['console_url']
     prometheus_url = tenant_info['prometheus_url']
@@ -55,7 +55,7 @@ async def test():
     print(f'Instance ID: {instance_id}')
     async with AsyncExitStack() as exit_stack:
         created_instance = await cwm_minio_api('instances/create', method='post', json={"instance_id": instance_id})
-        exit_stack.push_async_callback(cwm_minio_api, 'instances/delete', method='delete', params={instance_id: instance_id})
+        exit_stack.push_async_callback(cwm_minio_api, 'instances/delete', method='delete', params={"instance_id": instance_id})
         assert created_instance.keys() == {'instance_id', 'blocked', 'num_buckets', 'access_key', 'secret_key'}
         assert created_instance['instance_id'] == instance_id
         assert created_instance['blocked'] == False
@@ -65,7 +65,7 @@ async def test():
         instance_secret_key = created_instance.pop('secret_key')
         assert len(instance_secret_key) == 40
         assert instance_id in (await cwm_minio_api('instances/list'))
-        assert (await cwm_minio_api('instances/get', instance_id=instance_id)) == created_instance
+        assert (await cwm_minio_api('instances/get', params=dict(instance_id=instance_id))) == created_instance
         bucket_name = 'cwm-e2e-test-bucket'
         created_bucket = await cwm_minio_api('buckets/create', method='post', json=dict(instance_id=instance_id, bucket_name=bucket_name, public=False))
         assert created_bucket.keys() == {'blocked', 'bucket_name', 'instance_id', 'public'}
