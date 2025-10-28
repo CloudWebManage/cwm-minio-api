@@ -1,10 +1,16 @@
 import tempfile
 
+import orjson
+
 from .. import config, common
 
 
 async def mc_check_call(*args):
     await common.async_subprocess_check_call(config.MINIO_MC_BINARY, *args)
+
+
+async def mc_check_output(*args):
+    return await common.async_subprocess_check_output(config.MINIO_MC_BINARY, *args)
 
 
 async def create_bucket(name, exit_stack=None):
@@ -71,3 +77,8 @@ async def bucket_anonymous_set_none(bucket_name, exit_stack=None):
     await mc_check_call('anonymous', 'set', 'none', f'{config.MINIO_MC_PROFILE}/{bucket_name}')
     if exit_stack:
         exit_stack.push_async_callback(bucket_anonymous_set_download, bucket_name)
+
+
+async def get_bucket_size(bucket_name):
+    stat = orjson.loads(await mc_check_output('stat', f'{config.MINIO_MC_PROFILE}/{bucket_name}', '--json'))
+    return stat.get('Usage', {}).get('size')

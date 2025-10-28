@@ -1,3 +1,4 @@
+import traceback
 from textwrap import dedent
 from contextlib import AsyncExitStack
 
@@ -191,14 +192,32 @@ async def delete(instance_id, bucket_name):
             stack.pop_all()
 
 
-async def list_iterator(instance_id, cur=None):
+async def list_iterator(instance_id, cur=None, with_size=False):
+    total_size = 0
     async with db.connection_cursor(cur) as (conn, cur):
         await cur.execute('SELECT name FROM buckets WHERE instance_id = %s', (instance_id,))
         async for row in cur:
-            yield row['name']
+            if with_size:
+                try:
+                    size = await minio_api.get_bucket_size(row['name'])
+                except:
+                    traceback.print_exc()
+                    size = None
+                total_size += size
+                yield {
+                    'name': row['name'],
+                    'size_bytes': size,
+                }
+            else:
+                yield row['name']
+    if with_size:
+        yield {
+            'name': '*',
+            'size_bytes': total_size,
+        }
 
 
-async def get(instance_id, bucket_name, cur=None):
+async def get(instance_id, bucket_name, cur=None, with_size=False):
     async with db.connection_cursor(cur) as (conn, cur):
         await cur.execute('''
             SELECT public, blocked
@@ -209,12 +228,20 @@ async def get(instance_id, bucket_name, cur=None):
         if row is None:
             return None
         else:
-            return {
+            res = {
                 'bucket_name': bucket_name,
                 'instance_id': instance_id,
                 'public': row['public'],
                 'blocked': row['blocked']
             }
+            if with_size:
+                try:
+                    size = await minio_api.get_bucket_size(bucket_name)
+                except:
+                    traceback.print_exc()
+                    size = None
+                res['size_bytes'] = size
+            return res
 
 
 async def list_buckets_prometheus_sd(targets):

@@ -1,5 +1,6 @@
 import asyncclick as click
 from fastapi import APIRouter
+from pydantic import BaseModel
 
 from . import api
 from .. import common
@@ -13,20 +14,24 @@ async def main():
     pass
 
 
-@main.command()
-@click.argument('instance_id')
+class CreateRequest(BaseModel):
+    instance_id: str
+
+
 @router.post('/instances/create', tags=['instances'])
-async def create(instance_id: str):
-    return common.cli_print_json(await api.create(instance_id))
+async def create(request: CreateRequest):
+    return common.cli_print_json(await api.create(request.instance_id))
 
 
-@main.command()
-@click.argument('instance_id')
-@click.option('--blocked', is_flag=True)
-@click.option('--reset-access-key', is_flag=True)
+class UpdateRequest(BaseModel):
+    instance_id: str
+    blocked: bool
+    reset_access_key: bool
+
+
 @router.put('/instances/update', tags=['instances'])
-async def update(instance_id: str, blocked: bool, reset_access_key: bool):
-    return common.cli_print_json(await api.update(instance_id, blocked, reset_access_key))
+async def update(request: UpdateRequest):
+    return common.cli_print_json(await api.update(request.instance_id, request.blocked, request.reset_access_key))
 
 
 @main.command()
