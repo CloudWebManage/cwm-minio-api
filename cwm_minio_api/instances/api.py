@@ -1,3 +1,4 @@
+import logging
 from contextlib import AsyncExitStack
 
 from ..minio import api as minio_api
@@ -74,8 +75,11 @@ async def delete(instance_id):
             for bucket_name in bucket_names
         ])
         access_key = instance['access_key']
-        await minio_api.delete_user(access_key)
-        await access_keys.delete_access_key(access_key)
+        if access_key:
+            await minio_api.delete_user(access_key)
+            await access_keys.delete_access_key(access_key)
+        else:
+            logging.warning(f'Delete instance {instance_id}: has no access key set, skipping user deletion')
         await cur.execute('''
             DELETE FROM instances
             WHERE id = %s
