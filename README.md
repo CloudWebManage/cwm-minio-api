@@ -21,6 +21,11 @@ Prerequisites:
 * [uv](https://pypi.org/project/uv/)
 * [Migrate](https://github.com/golang-migrate/migrate/tree/master/cmd/migrate#installation)
 * Docker
+* Minio MC
+  * Get the version from the Dockerfile `MINIO_VERSION`
+  * Run the docker image: `docker run --rm --name minio -d minio/minio:<MINIO_VERSION> server /srv`
+  * Copy the `mc` binary: `docker cp minio:/usr/bin/mc /usr/local/bin/mc`
+  * Create Minio cwm profile connected to relevant cluster: `mc alias set cwm MINIO_URL USER PASSWORD`
 
 Install:
 
@@ -30,10 +35,11 @@ uv sync
 
 Set configuration values in `.env` file (See Configuration section above for details)
 
-Start the DB:
+Start the DB and apply migrations:
 
 ```
 docker compose up -d db
+bin/migrate.sh up
 ```
 
 Run the CLI:
