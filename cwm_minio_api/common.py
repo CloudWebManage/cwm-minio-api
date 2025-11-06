@@ -19,7 +19,7 @@ def cli_print_json(data):
 
 
 async def async_subprocess_check_call(*args, **kwargs):
-    assert (await (await asyncio.create_subprocess_exec(*args, **kwargs)).wait()) == 0
+    assert (await (await asyncio.create_subprocess_exec(*args, **kwargs)).wait()) == 0, f'Command {" ".join(args)} failed, check logs for details'
 
 
 async def async_subprocess_check_output(*args, **kwargs):

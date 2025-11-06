@@ -1,3 +1,5 @@
+import asyncio
+import logging
 import tempfile
 
 import orjson
@@ -5,16 +7,22 @@ import orjson
 from .. import config, common
 
 
-async def mc_check_call(*args):
-    await common.async_subprocess_check_call(config.MINIO_MC_BINARY, *args)
+async def mc_check_call(*args, return_output=False):
+    logging.debug(f'mc_check_call({" ".join(args)})')
+    proc = await asyncio.create_subprocess_exec(config.MINIO_MC_BINARY, *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+    stdout, _ = await proc.communicate()
+    stdout = stdout.decode().strip()
+    logging.debug(f'mc_check_call({" ".join(args)}): {stdout}')
+    assert proc.returncode == 0, stdout
+    return stdout if return_output else None
 
 
 async def mc_check_output(*args):
-    return await common.async_subprocess_check_output(config.MINIO_MC_BINARY, *args)
+    return await mc_check_call(*args, return_output=True)
 
 
 async def create_bucket(name, exit_stack=None):
-    await mc_check_call('mb', f'{config.MINIO_MC_PROFILE}/{name}')
+    await mc_check_call('mb', f'{config.MINIO_MC_PROFILE}/{name}......__~V~')
     if exit_stack:
         exit_stack.push_async_callback(delete_bucket, name)
 
