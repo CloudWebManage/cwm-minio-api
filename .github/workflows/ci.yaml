@@ -27,9 +27,9 @@ jobs:
       - uses: CloudWebManage/cwm-iac/actions/docker-build-push@main
         with:
           test_script: |
-            docker compose up -d db
+            docker compose up -d db minio
             uv sync
-            uv run pytest
+            uv run pytest -svvx
           image_suffix: cwm-minio-api
           build_args: |
             MINIO_VERSION=${{ env.MINIO_VERSION }}

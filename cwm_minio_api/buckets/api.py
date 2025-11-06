@@ -202,8 +202,9 @@ async def list_iterator(instance_id, cur=None, with_size=False):
                     size = await minio_api.get_bucket_size(row['name'])
                 except:
                     traceback.print_exc()
-                    size = 0
-                total_size += size
+                    size = None
+                if size:
+                    total_size += size
                 yield {
                     'name': row['name'],
                     'size_bytes': size,

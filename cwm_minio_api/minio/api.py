@@ -22,7 +22,7 @@ async def mc_check_output(*args):
 
 
 async def create_bucket(name, exit_stack=None):
-    await mc_check_call('mb', f'{config.MINIO_MC_PROFILE}/{name}......__~V~')
+    await mc_check_call('mb', f'{config.MINIO_MC_PROFILE}/{name}')
     if exit_stack:
         exit_stack.push_async_callback(delete_bucket, name)
 

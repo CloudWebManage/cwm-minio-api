@@ -2,6 +2,7 @@ import pytest
 
 from cwm_minio_api.instances import api as instances_api
 from cwm_minio_api.buckets import api as buckets_api
+from cwm_minio_api import db
 
 
 async def test_crud(cwm_test_db):
@@ -35,3 +36,12 @@ async def test_crud(cwm_test_db):
     assert [c['access_key'] async for c in buckets_api.credentials_list_iterator(instance_id, bucket_name)] == [bucket_access_key]
     await instances_api.delete(instance_id)
     assert [i async for i in instances_api.list_iterator()] == []
+
+
+async def test_instance_delete_without_accesskey(cwm_test_db):
+    instance_id = 'test_instance_1'
+    await instances_api.create(instance_id)
+    async with db.connection_cursor() as (conn, cur):
+        await cur.execute('UPDATE instances SET access_key = NULL WHERE id = %s', (instance_id,))
+        await conn.commit()
+    await instances_api.delete(instance_id)

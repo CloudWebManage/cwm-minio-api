@@ -76,3 +76,13 @@ async def async_run_batches(tasks, batch_size=10):
         async with asyncio.TaskGroup() as tg:
             for task in tasks[i:i + batch_size]:
                 tg.create_task(task)
+
+
+async def wait_for(condition_coro, timeout, check_interval=0.5):
+    start_time = asyncio.get_event_loop().time()
+    while True:
+        if await condition_coro():
+            return
+        if asyncio.get_event_loop().time() - start_time > timeout:
+            raise TimeoutError('Timeout waiting for condition')
+        await asyncio.sleep(check_interval)
