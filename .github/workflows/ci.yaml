@@ -24,6 +24,11 @@ jobs:
           curl -L https://github.com/golang-migrate/migrate/releases/download/${MIGRATE_VERSION}/migrate.linux-amd64.tar.gz | tar xvz &&\
           mv migrate /usr/local/bin/migrate &&\
           chmod +x /usr/local/bin/migrate
+      - name: install minio mc
+        run: |
+          docker run --rm -v /tmp:/tmp --entrypoint cp minio/minio:${MINIO_VERSION} /usr/bin/mc /tmp/mc &&\
+          sudo cp /tmp/mc /usr/local/bin/mc &&\
+          sudo chmod +x /usr/local/bin/mc
       - uses: CloudWebManage/cwm-iac/actions/docker-build-push@main
         with:
           test_script: |
@@ -56,12 +61,6 @@ jobs:
                 }
               ]
             }
-      - name: install minio mc
-        if: ${{ github.ref == 'refs/heads/main' }}
-        run: |
-          docker run --rm -v /tmp:/tmp --entrypoint cp minio/minio:${MINIO_VERSION} /usr/bin/mc /tmp/mc &&\
-          sudo cp /tmp/mc /usr/local/bin/mc &&\
-          sudo chmod +x /usr/local/bin/mc
       - name: run e2e tests
         if: ${{ github.ref == 'refs/heads/main' }}
         env:
