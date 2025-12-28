@@ -76,3 +76,17 @@ Migrations management:
 ```
 bin/migrate.sh --help
 ```
+
+## Tests
+
+To run tests, start the DB container:
+
+```
+docker compose up -d db
+```
+
+Run tests with:
+
+```
+uv run pytest
+```

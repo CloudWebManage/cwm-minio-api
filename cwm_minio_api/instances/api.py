@@ -37,7 +37,7 @@ async def update(instance_id, blocked=False, reset_access_key=False):
         bucket_names = [b async for b in buckets_api.list_iterator(instance_id, cur=cur)]
         async with AsyncExitStack() as stack:
             await common.async_run_batches([
-                buckets_api.update(instance_id, bucket_name, blocked=blocked)
+                buckets_api.update_block(instance_id, bucket_name, blocked=blocked)
                 for bucket_name in bucket_names
             ])
             if reset_access_key:

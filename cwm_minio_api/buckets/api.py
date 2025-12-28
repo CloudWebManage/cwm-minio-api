@@ -114,7 +114,12 @@ async def create(instance_id, bucket_name, public=False):
         return await get(instance_id, bucket_name, cur=cur)
 
 
-async def update(instance_id, bucket_name, public=False, blocked=False):
+async def update_block(instance_id, bucket_name, blocked):
+    bucket = await get(instance_id, bucket_name)
+    return await update(instance_id, bucket_name, public=bucket['public'], blocked=blocked)
+
+
+async def update(instance_id, bucket_name, public, blocked):
     async with db.connection_cursor() as (conn, cur):
         instance = await get_instance(instance_id, cur=cur)
         if instance is None:
@@ -128,15 +133,26 @@ async def update(instance_id, bucket_name, public=False, blocked=False):
             WHERE instance_id = %s AND name = %s
         ''', (public, blocked, instance_id, bucket_name))
         async with AsyncExitStack() as stack:
-            if public and not bucket['public']:
+            action_block_bucket = blocked and not bucket['blocked']
+            action_unblock_bucket = not blocked and bucket['blocked']
+            action_public_bucket = public and not bucket['public']
+            action_private_bucket = not public and bucket['public']
+            if action_public_bucket or (action_unblock_bucket and public):
                 await minio_api.bucket_anonymous_set_download(bucket_name, exit_stack=stack)
-            elif not public and bucket['public']:
+            if action_private_bucket or (action_block_bucket and public):
                 await minio_api.bucket_anonymous_set_none(bucket_name, exit_stack=stack)
-            if blocked and not bucket['blocked']:
+            if action_block_bucket:
                 await update_instance_access_key(bucket_name, instance['access_key'], None)
                 credentials = [c async for c in credentials_list_iterator(instance_id, bucket_name, cur=cur)]
                 await common.async_run_batches([
-                    credentials_delete(instance_id, bucket_name, c['access_key'])
+                    credentials_detach(bucket_name, c['access_key'], exit_stack=stack)
+                    for c in credentials
+                ])
+            if action_unblock_bucket:
+                await update_instance_access_key(bucket_name, None, instance['access_key'])
+                credentials = [c async for c in credentials_list_iterator(instance_id, bucket_name, cur=cur)]
+                await common.async_run_batches([
+                    credentials_attach(bucket_name, c['access_key'], c['permission_read'], c['permission_write'], c['permission_delete'])
                     for c in credentials
                 ])
             await conn.commit()
@@ -152,10 +168,11 @@ async def update_instance_access_key(bucket_name, old_access_key, new_access_key
     ]
     async with AsyncExitStack() as stack:
         tasks = []
-        tasks.extend([
-            minio_api.detach_policy_from_user(policy, old_access_key, exit_stack=stack)
-            for policy in policies
-        ])
+        if old_access_key:
+            tasks.extend([
+                minio_api.detach_policy_from_user(policy, old_access_key, exit_stack=stack)
+                for policy in policies
+            ])
         if new_access_key:
             tasks.extend([
                 minio_api.attach_policy_to_user(policy, new_access_key, exit_stack=stack)
@@ -257,6 +274,20 @@ async def list_buckets_prometheus_sd(targets):
         return buckets
 
 
+async def credentials_attach(bucket_name, access_key, permission_read, permission_write, permission_delete, exit_stack=None):
+    policies = []
+    if permission_read:
+        policies.append(f'{bucket_name}_read')
+    if permission_write:
+        policies.append(f'{bucket_name}_write')
+    if permission_delete:
+        policies.append(f'{bucket_name}_delete')
+    await common.async_run_batches([
+        minio_api.attach_policy_to_user(policy, access_key, exit_stack=exit_stack)
+        for policy in policies
+    ])
+
+
 async def credentials_create(instance_id, bucket_name, read, write, delete):
     if not any([read, write, delete]):
         raise Exception('At least one permission must be specified')
@@ -274,23 +305,24 @@ async def credentials_create(instance_id, bucket_name, read, write, delete):
                 VALUES (%s, %s, %s, %s, %s, %s)
             ''', (instance_id, bucket_name, access_key, read, write, delete))
             await minio_api.create_user(access_key, secret_key, exit_stack=exit_stack)
-            policies = []
-            if read:
-                policies.append(f'{bucket_name}_read')
-            if write:
-                policies.append(f'{bucket_name}_write')
-            if delete:
-                policies.append(f'{bucket_name}_delete')
-            await common.async_run_batches([
-                minio_api.attach_policy_to_user(policy, access_key, exit_stack=exit_stack)
-                for policy in policies
-            ])
+            await credentials_attach(bucket_name, access_key, read, write, delete, exit_stack=exit_stack)
             await conn.commit()
             exit_stack.pop_all()
     return {
         'access_key': access_key,
         'secret_key': secret_key,
     }
+
+
+async def credentials_detach(bucket_name, access_key, exit_stack=None):
+    await common.async_run_batches([
+        minio_api.detach_policy_from_user(policy, access_key, exit_stack=exit_stack)
+        for policy in [
+            f'{bucket_name}_read',
+            f'{bucket_name}_write',
+            f'{bucket_name}_delete',
+        ]
+    ])
 
 
 async def credentials_delete(instance_id, bucket_name, access_key):
@@ -309,14 +341,7 @@ async def credentials_delete(instance_id, bucket_name, access_key):
                 DELETE FROM bucket_credentials
                 WHERE instance_id = %s AND bucket_name = %s AND access_key = %s
             ''', (instance_id, bucket_name, access_key))
-            await common.async_run_batches([
-                minio_api.detach_policy_from_user(policy, access_key, exit_stack=stack)
-                for policy in [
-                    f'{bucket_name}_read',
-                    f'{bucket_name}_write',
-                    f'{bucket_name}_delete',
-                ]
-            ])
+            await credentials_detach(bucket_name, access_key, exit_stack=stack)
             await minio_api.delete_user(access_key)
             await conn.commit()
             stack.pop_all()
