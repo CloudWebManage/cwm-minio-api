@@ -90,3 +90,11 @@ Run tests with:
 ```
 uv run pytest
 ```
+
+## Load Tests
+
+```
+locust -f load_tests/locustfile.py
+```
+
+http://localhost:8089

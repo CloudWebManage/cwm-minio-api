@@ -29,6 +29,7 @@ cwm-minio-api = "cwm_minio_api.cli:main"
 
 [project.optional-dependencies]
 load-test = [
+    "botocore>=1.42.35",
     "locust>=2.43.1",
 ]
 

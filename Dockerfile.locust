@@ -1,0 +1,18 @@
+ARG PYTHON_VERSION=3.12
+
+FROM python:${PYTHON_VERSION} AS build
+ARG UV_VERSION=0.8.8
+RUN curl -LsSf https://astral.sh/uv/${UV_VERSION}/install.sh | sh
+COPY pyproject.toml uv.lock /srv/cwm-minio-api/
+WORKDIR /srv/cwm-minio-api
+RUN ~/.local/bin/uv export --no-emit-project --extra load-test > requirements.txt
+
+FROM ghcr.io/cloudwebmanage/cwm-minio-api:latest
+USER root
+COPY --from=build /srv/cwm-minio-api/requirements.txt /srv/cwm-minio-api/requirements.txt
+RUN pip install --upgrade pip && pip install --no-cache-dir -r /srv/cwm-minio-api/requirements.txt
+COPY pyproject.toml gunicorn.conf.py docker_entrypoint.sh ./
+COPY cwm_minio_api ./cwm_minio_api
+RUN pip install --no-cache-dir --no-deps -e .
+USER cwm-minio-api
+ENTRYPOINT ["locust", "-f", "cwm_minio_api/load_tests/locustfile.py"]

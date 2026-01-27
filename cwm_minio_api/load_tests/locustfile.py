@@ -1,1 +1,1 @@
-from cwm_minio_api.load_tests.users.base import BaseUser
+from cwm_minio_api.load_tests.users.uploader_downloader import UploaderDownloader
