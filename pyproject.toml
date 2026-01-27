@@ -27,5 +27,11 @@ build-backend = "hatchling.build"
 [project.scripts]
 cwm-minio-api = "cwm_minio_api.cli:main"
 
+[project.optional-dependencies]
+load-test = [
+    "botocore>=1.42.35",
+    "locust>=2.43.1",
+]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

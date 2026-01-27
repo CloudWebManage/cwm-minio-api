@@ -1,0 +1,18 @@
+name: CI Locust
+on:
+  push:
+env:
+  UV_VERSION: "0.8.8"
+  PYTHON_VERSION: "3.12"
+jobs:
+  ci-locust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: CloudWebManage/cwm-iac/actions/docker-build-push@main
+        with:
+          image_suffix: cwm-minio-api-locust
+          dockerfile: Dockerfile.locust
+          build_args: |
+            PYTHON_VERSION=${{ env.PYTHON_VERSION }}
+            UV_VERSION=${{ env.UV_VERSION }}
