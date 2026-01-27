@@ -30,7 +30,7 @@ Prerequisites:
 Install:
 
 ```
-uv sync
+uv sync --all-extras
 ```
 
 Set configuration values in `.env` file (See Configuration section above for details)
