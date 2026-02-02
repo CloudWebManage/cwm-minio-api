@@ -30,10 +30,13 @@ class GetGetter(BaseUser):
         all_instance_ids = self.shared_state.get_instance_ids()
         if len(all_instance_ids) > 0:
             if self.num_all_instances != len(all_instance_ids):
-                self.instance_id = random.choice(self.shared_state.get_instance_ids())
-                self.instance_access_key, self.instance_secret_key = self.shared_state.get_instance(self.instance_id)
-                print(f'GetGetter using instance: {self.instance_id} (total instances: {len(all_instance_ids)})')
-                self.num_all_instances = len(all_instance_ids)
+                instance_id = random.choice(all_instance_ids)
+                instance = self.shared_state.get_instance(instance_id)
+                if instance:
+                    self.instance_access_key, self.instance_secret_key = instance
+                    self.instance_id = instance_id
+                    print(f'GetGetter using instance: {self.instance_id} (total instances: {len(all_instance_ids)})')
+                    self.num_all_instances = len(all_instance_ids)
 
     def on_start(self):
         self.update_tenant_info()

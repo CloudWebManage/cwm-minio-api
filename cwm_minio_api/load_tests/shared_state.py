@@ -11,8 +11,8 @@ class SharedState:
         self.key_prefix = 'cwm-minio-api:load-tests'
 
     def add_instance(self, instance_id, instance_access_key, instance_secret_key):
-        self.redis.sadd(f'{self.key_prefix}:instances', instance_id)
         self.redis.set(f'{self.key_prefix}:instances:{instance_id}', f'{instance_access_key}:{instance_secret_key}')
+        self.redis.sadd(f'{self.key_prefix}:instances', instance_id)
 
     def delete_instance(self, instance_id):
         self.redis.srem(f'{self.key_prefix}:instances', instance_id)
@@ -21,8 +21,8 @@ class SharedState:
     def upsert_bucket(self, instance_id, bucket_name, bucket):
         key = f'{self.key_prefix}:instances:{instance_id}:buckets:'
         key += 'public' if bucket["public"] else 'private'
-        self.redis.sadd(key, bucket_name)
         self.redis.set(f'{key}:{bucket_name}', json.dumps(bucket))
+        self.redis.sadd(key, bucket_name)
 
     def delete_bucket(self, instance_id, bucket_name):
         for suffix in ['public', 'private']:
@@ -31,8 +31,8 @@ class SharedState:
             self.redis.delete(f'{key}:{bucket_name}')
 
     def add_file(self, instance_id, bucket_name, filename, content_length):
-        self.redis.sadd(f'{self.key_prefix}:instances:{instance_id}:buckets:{bucket_name}:files', filename)
         self.redis.set(f'{self.key_prefix}:instances:{instance_id}:buckets:{bucket_name}:files:{filename}', content_length)
+        self.redis.sadd(f'{self.key_prefix}:instances:{instance_id}:buckets:{bucket_name}:files', filename)
 
     def delete_file(self, instance_id, bucket_name, filename):
         self.redis.srem(f'{self.key_prefix}:instances:{instance_id}:buckets:{bucket_name}:files', filename)
