@@ -1,7 +1,13 @@
 import uuid
-from locust import task, FastHttpUser
+import hashlib
+
+from locust import FastHttpUser
+from botocore.awsrequest import AWSRequest
+from botocore.auth import SigV4Auth
+from botocore.credentials import Credentials
 
 from .. import config
+from ..shared_state import SharedState
 
 
 def generate_instance_id():
@@ -20,6 +26,7 @@ class BaseUser(FastHttpUser):
     def __init__(self, environment):
         super().__init__(environment)
         assert config.CWM_MINIO_API_USERNAME and config.CWM_MINIO_API_PASSWORD
+        self.shared_state = SharedState()
         self.instance_id = None
         self.instance_access_key = None
         self.instance_secret_key = None
@@ -47,10 +54,12 @@ class BaseUser(FastHttpUser):
             },
             auth=(config.CWM_MINIO_API_USERNAME, config.CWM_MINIO_API_PASSWORD),
         )
-        res.raise_for_status()
+        if res.status_code < 200 or res.status_code >= 300:
+            raise Exception(f'Failed to create instance {self.instance_id}: {res.status_code} {res.text}')
         instance = res.json()
         self.instance_access_key = instance["access_key"]
         self.instance_secret_key = instance["secret_key"]
+        self.shared_state.add_instance(self.instance_id, self.instance_access_key, self.instance_secret_key)
 
     def update_instance_buckets(self):
         print(f'Updating instance buckets: {self.instance_id}')
@@ -59,7 +68,8 @@ class BaseUser(FastHttpUser):
             params={"instance_id": self.instance_id},
             auth=(config.CWM_MINIO_API_USERNAME, config.CWM_MINIO_API_PASSWORD),
         )
-        res.raise_for_status()
+        if res.status_code < 200 or res.status_code >= 300:
+            raise Exception(f'Failed to list buckets in instance {self.instance_id}: {res.status_code} {res.text}')
         for name in res.json():
             res = self.client.get(
                 f"/buckets/get",
@@ -71,6 +81,7 @@ class BaseUser(FastHttpUser):
                 "created": False,
                 "public": bucket["public"]
             }
+            self.shared_state.upsert_bucket(self.instance_id, name, self.instance_buckets[name])
 
     def create_bucket(self, public=False):
         bucket_name = generate_bucket_name(public)
@@ -80,11 +91,13 @@ class BaseUser(FastHttpUser):
             json={"instance_id": self.instance_id, "bucket_name": bucket_name, "public": public},
             auth=(config.CWM_MINIO_API_USERNAME, config.CWM_MINIO_API_PASSWORD),
         )
-        res.raise_for_status()
+        if res.status_code < 200 or res.status_code >= 300:
+            raise Exception(f'Failed to create bucket {bucket_name} in instance {self.instance_id}: {res.status_code} {res.text}')
         self.instance_buckets[bucket_name] = {
             "created": True,
             "public": public,
         }
+        self.shared_state.upsert_bucket(self.instance_id, bucket_name, self.instance_buckets[bucket_name])
         return bucket_name
 
     def update_tenant_info(self):
@@ -103,6 +116,7 @@ class BaseUser(FastHttpUser):
             self.create_bucket()
 
     def on_stop(self):
+        print("Deleting buckets...")
         for bucket_name, bucket in self.instance_buckets.items():
             if bucket["created"] and not config.CWM_KEEP_BUCKETS:
                 print(f'Deleting bucket: {bucket_name} (instance={self.instance_id})')
@@ -111,7 +125,10 @@ class BaseUser(FastHttpUser):
                     params={"instance_id": self.instance_id, "bucket_name": bucket_name},
                     auth=(config.CWM_MINIO_API_USERNAME, config.CWM_MINIO_API_PASSWORD),
                 )
-                res.raise_for_status()
+                if res.status_code < 200 or res.status_code >= 300:
+                    raise Exception(f'Failed to delete bucket {bucket_name} in instance {self.instance_id}: {res.status_code} {res.text}')
+                self.shared_state.delete_bucket(self.instance_id, bucket_name)
+        print("Deleting instances...")
         if not self.existing_instance and not config.CWM_KEEP_INSTANCE and not config.CWM_KEEP_BUCKETS:
             print(f'Deleting instance: {self.instance_id}')
             res = self.client.delete(
@@ -119,4 +136,21 @@ class BaseUser(FastHttpUser):
                 params={"instance_id": self.instance_id},
                 auth=(config.CWM_MINIO_API_USERNAME, config.CWM_MINIO_API_PASSWORD),
             )
-            res.raise_for_status()
+            if res.status_code < 200 or res.status_code >= 300:
+                raise Exception(f'Failed to delete instance {self.instance_id}: {res.status_code} {res.text}')
+            self.shared_state.delete_instance(self.instance_id)
+        print("Teardown complete.")
+
+    def download_from_bucket_filename(self, bucket_name, filename, is_public=False):
+        url = f'{self.minio_api_url}/{bucket_name}/{filename}'
+        if is_public:
+            res = self.client.get(url)
+            if res.status_code < 200 or res.status_code >= 300:
+                raise Exception(f'Failed to download file {filename} from public bucket {bucket_name}: {res.status_code} {res.text}')
+        else:
+            payload_hash = hashlib.sha256(b"").hexdigest()
+            request = AWSRequest(method="GET", url=url, headers={"x-amz-content-sha256": payload_hash})
+            SigV4Auth(Credentials(self.instance_access_key, self.instance_secret_key), "s3", "us-east-1").add_auth(request)
+            res = self.client.get(url, headers=dict(request.headers))
+            if res.status_code < 200 or res.status_code >= 300:
+                raise Exception(f'Failed to download file {filename} from private bucket {bucket_name}: {res.status_code} {res.text}')

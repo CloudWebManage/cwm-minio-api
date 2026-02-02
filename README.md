@@ -93,8 +93,18 @@ uv run pytest
 
 ## Load Tests
 
+Start Redis container:
+
 ```
-locust -f load_tests/locustfile.py
+docker run -d --name redis -p 6379:6379 redis:8
 ```
+
+Start locust:
+
+```
+locust -f cwm_minio_api/load_tests/locustfile.py
+```
+
+Start tests from the web UI:
 
 http://localhost:8089
