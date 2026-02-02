@@ -12,7 +12,10 @@ from .. import config
 
 
 class UpDownDel(BaseUser):
-    weight = config.CWM_UPDOWNDEL_USER_WEIGHT
+    if config.CWM_UPDOWNDEL_FIXED_COUNT > 0:
+        fixed_count = config.CWM_UPDOWNDEL_FIXED_COUNT
+    else:
+        weight = config.CWM_UPDOWNDEL_USER_WEIGHT
 
     def __init__(self, environment):
         super().__init__(environment)

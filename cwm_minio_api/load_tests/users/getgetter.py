@@ -7,7 +7,10 @@ from .. import config
 
 
 class GetGetter(BaseUser):
-    weight = config.CWM_GETGETTER_USER_WEIGHT
+    if config.CWM_GETGETTER_FIXED_COUNT > 0:
+        fixed_count = config.CWM_GETGETTER_FIXED_COUNT
+    else:
+        weight = config.CWM_GETGETTER_USER_WEIGHT
 
     def __init__(self, environment):
         super().__init__(environment)
