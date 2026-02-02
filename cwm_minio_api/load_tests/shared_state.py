@@ -48,8 +48,11 @@ class SharedState:
 
     def get_instance(self, instance_id):
         data = self.redis.get(f'{self.key_prefix}:instances:{instance_id}')
-        access_key, secret_key = data.decode('utf-8').split(':', 1)
-        return access_key, secret_key
+        if data:
+            access_key, secret_key = data.decode('utf-8').split(':', 1)
+            return access_key, secret_key
+        else:
+            return None
 
     def get_filenames(self, instance_id, bucket_name):
         key = f'{self.key_prefix}:instances:{instance_id}:buckets:{bucket_name}:files'
