@@ -5,6 +5,7 @@ import importlib
 import asyncclick as click
 
 from . import config, access_keys
+from .load_tests import cli as load_tests_cli
 
 
 logging.basicConfig(
@@ -24,6 +25,7 @@ for submodule in [
 ]:
     main.add_command(getattr(importlib.import_module(f'.{submodule}.router', __package__), 'main'), name=submodule.replace('_', '-'))
 
+main.add_command(load_tests_cli.main, name='load-tests')
 
 @main.command()
 async def get_access_key():
