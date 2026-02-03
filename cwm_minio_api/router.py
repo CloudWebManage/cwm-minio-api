@@ -18,5 +18,6 @@ for submodule in [
     'instances',
     'buckets',
     'tenant',
+    'metrics',
 ]:
     router.include_router(getattr(importlib.import_module(f'.{submodule}.router', __package__), 'router'))

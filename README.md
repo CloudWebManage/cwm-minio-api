@@ -13,6 +13,12 @@ You can see the full list of available configuration options in the following fi
 * App configuration values: [cwm_minio_api/config.py](cwm_minio_api/config.py)
 * Web server configuration values: [gunicorn_conf.py](gunicorn_conf.py)
 
+## Prometheus
+
+The API exposes Prometheus metrics at `/metrics`.
+
+If you run the API with multiple Gunicorn workers, set `PROMETHEUS_MULTIPROC_DIR` to a writable directory to aggregate metrics across workers (see `gunicorn.conf.py`).
+
 ## Local Development
 
 Prerequisites:

@@ -21,3 +21,5 @@ MINIO_MC_PROFILE = os.getenv('MINIO_MC_PROFILE', 'cwm')
 TENANT_INFO = orjson.loads(os.getenv('TENANT_INFO_JSON', '{}'))
 
 ACCESS_KEY_LENGTH = int(os.getenv('ACCESS_KEY_LENGTH', '24'))
+
+PROMETHEUS_MULTIPROC_DIR = os.getenv("PROMETHEUS_MULTIPROC_DIR")
