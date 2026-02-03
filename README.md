@@ -108,6 +108,7 @@ docker run -d --name redis -p 6379:6379 redis:8
 Start locust:
 
 ```
+uv sync --all-extras
 locust -f cwm_minio_api/load_tests/locustfile.py
 ```
 
