@@ -1,7 +1,6 @@
 import hashlib
 import uuid
 import random
-from datetime import datetime
 from textwrap import dedent
 import base64
 
@@ -20,6 +19,8 @@ class UpDownDel(BaseUser):
     else:
         weight = config.CWM_UPDOWNDEL_USER_WEIGHT
 
+    concurrency = config.CWM_UPDOWNDEL_CONCURRENCY
+
     def __init__(self, environment):
         super().__init__(environment)
 
@@ -36,12 +37,13 @@ class UpDownDel(BaseUser):
         payload_hash = hashlib.sha256(body).hexdigest()
         request = AWSRequest(method="PUT", url=url, data=body, headers={"x-amz-content-sha256": payload_hash})
         SigV4Auth(Credentials(self.instance_access_key, self.instance_secret_key), "s3", "us-east-1").add_auth(request)
-        with self.client.put(url, headers=dict(request.headers), data=body, catch_response=True) as res:
-            if res.status_code < 200 or res.status_code >= 300:
-                res.failure(f'Failed to upload file {filename} to bucket {bucket_name}: {res.status_code} {res.text}')
-            else:
-                res.success()
-                self.shared_state.add_file(self.instance_id, bucket_name, filename, content_length)
+        self.client_request_retry(
+            'put',
+            url,
+            headers=dict(request.headers),
+            data=body,
+        )
+        self.shared_state.add_file(self.instance_id, bucket_name, filename, content_length)
         return filename
 
     def delete_from_bucket(self, bucket_name, filename):
@@ -50,11 +52,11 @@ class UpDownDel(BaseUser):
         payload_hash = hashlib.sha256(b"").hexdigest()
         request = AWSRequest(method="DELETE", url=url, headers={"x-amz-content-sha256": payload_hash})
         SigV4Auth(Credentials(self.instance_access_key, self.instance_secret_key), "s3", "us-east-1").add_auth(request)
-        with self.client.delete(url, headers=dict(request.headers), catch_response=True) as res:
-            if res.status_code < 200 or res.status_code >= 300:
-                res.failure(f'Failed to delete file {filename} from bucket {bucket_name}: {res.status_code} {res.text}')
-            else:
-                res.success()
+        self.client_request_retry(
+            'delete',
+            url,
+            headers=dict(request.headers),
+        )
 
     def delete_from_bucket_multi(self, bucket_name, filenames):
         for filename in filenames:
@@ -75,11 +77,12 @@ class UpDownDel(BaseUser):
         }
         request = AWSRequest(method="POST", url=url, headers=headers, data=body)
         SigV4Auth(Credentials(self.instance_access_key, self.instance_secret_key), "s3", "us-east-1").add_auth(request)
-        with self.client.post(url, data=body.decode(), headers=dict(request.headers), catch_response=True) as res:
-            if res.status_code < 200 or res.status_code >= 300:
-                res.failure(f'Failed to delete files {filenames} from bucket {bucket_name}: {res.status_code} {res.text}')
-            else:
-                res.success()
+        self.client_request_retry(
+            'post',
+            url,
+            data=body.decode(),
+            headers=dict(request.headers),
+        )
 
     def get_test_bucket_name(self):
         is_public = random.choices([True, False], weights=[config.CWM_UPDOWNDEL_PUBLIC_WEIGHT, config.CWM_UPDOWNDEL_PRIVATE_WEIGHT], k=1)[0]

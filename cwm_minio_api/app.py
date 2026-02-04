@@ -6,12 +6,15 @@ from fastapi.responses import ORJSONResponse
 
 from .version import VERSION
 from .router import router
-from . import config
+from . import config, common
 
 
 async def global_exception_handler(request: Request, exc: Exception):
+    status_code = 500
+    if isinstance(exc, common.ServerOverloadedException):
+        status_code = 503
     return ORJSONResponse(
-        status_code=500,
+        status_code=status_code,
         content={
             "exception": str(exc),
             "traceback": traceback.format_exception(exc),

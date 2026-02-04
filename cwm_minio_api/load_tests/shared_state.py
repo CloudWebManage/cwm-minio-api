@@ -115,3 +115,6 @@ class SharedState:
             return self.seconds_since(ts)
         else:
             return None
+
+    def is_filename_exists(self, instance_id, bucket_name, filename):
+        return self.redis.sismember(f'{self.key_prefix}:instances:{instance_id}:buckets:{bucket_name}:files', filename)

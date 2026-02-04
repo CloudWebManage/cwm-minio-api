@@ -12,6 +12,8 @@ class GetGetter(BaseUser):
     else:
         weight = config.CWM_GETGETTER_USER_WEIGHT
 
+    concurrency = config.CWM_GETGETTER_CONCURRENCY
+
     def __init__(self, environment):
         super().__init__(environment)
         self.num_all_instances = 0

@@ -86,3 +86,7 @@ async def wait_for(condition_coro, timeout, check_interval=0.5):
         if asyncio.get_event_loop().time() - start_time > timeout:
             raise TimeoutError('Timeout waiting for condition')
         await asyncio.sleep(check_interval)
+
+
+class ServerOverloadedException(Exception):
+    pass
