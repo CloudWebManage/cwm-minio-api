@@ -142,14 +142,20 @@ class BaseUser(FastHttpUser):
                     return True, f'file not found'
             return False, None
 
+        def pre_return_hook(res):
+            if res.status_code == 404:
+                # file downloaded while deleted
+                res.success()
+
         self.client_request_retry(
             'get',
             url,
             headers=headers,
             should_retry=should_retry,
+            pre_return_hook=pre_return_hook,
         )
 
-    def client_request_retry(self, client_method, *args, max_attempts=10, backoff=(1, 20, 2), should_retry=None, **kwargs):
+    def client_request_retry(self, client_method, *args, max_attempts=10, backoff=(1, 20, 2), should_retry=None, pre_return_hook=None, **kwargs):
         last_error_msg = None
         for attempt in range(1, max_attempts + 1):
             with getattr(self.client, client_method)(*args, catch_response=True, **kwargs) as res:
@@ -169,5 +175,7 @@ class BaseUser(FastHttpUser):
                         last_error_msg = f'{msg}\n{res.status_code} {res.text}'
                         break
                 else:
+                    if pre_return_hook:
+                        pre_return_hook(res)
                     return res.status_code, res.text
         raise Exception(f'client_request_retry: exceeded max attempts {max_attempts}: {last_error_msg}')
