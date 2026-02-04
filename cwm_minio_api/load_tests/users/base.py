@@ -40,6 +40,9 @@ class BaseUser(FastHttpUser):
     def minio_api_url(self):
         return self.tenant_info["api_url"].rstrip('/')
 
+    def get_minio_bucket_api_url(self, bucket_name):
+        return self.tenant_info["bucket_api_url"].replace('<BUCKET_NAME>', bucket_name).rstrip('/')
+
     def create_instance(self):
         self.instance_id = generate_instance_id()
         print(f'Creating instance: {self.instance_id}')
@@ -127,8 +130,11 @@ class BaseUser(FastHttpUser):
             raise Exception("Errors during teardown:\n" + "\n".join(errors))
         print("Teardown complete.")
 
-    def download_from_bucket_filename(self, bucket_name, filename, is_public=False):
-        url = f'{self.minio_api_url}/{bucket_name}/{filename}'
+    def download_from_bucket_filename(self, bucket_name, filename, is_public=False, use_bucket_url=True):
+        if use_bucket_url:
+            url = self.get_minio_bucket_api_url(bucket_name)
+        else:
+            url = f'{self.minio_api_url}/{bucket_name}/{filename}'
         headers = {}
         if not is_public:
             payload_hash = hashlib.sha256(b"").hexdigest()
