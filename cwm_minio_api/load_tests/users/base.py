@@ -172,8 +172,8 @@ class BaseUser(FastHttpUser):
                 if should_retry:
                     retry, msg = should_retry(res)
                 else:
-                    retry = res.status_code in (404, 503)
-                    msg = f'{res.status_code}'
+                    retry = res.status_code in (502, 503)
+                    msg = f'{res.status_code} {res.text}'
                 if retry:
                     if attempt < max_attempts:
                         res.failure(f'{msg} ({attempt}/{max_attempts})')
