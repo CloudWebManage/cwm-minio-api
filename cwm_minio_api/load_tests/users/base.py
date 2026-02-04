@@ -152,6 +152,10 @@ class BaseUser(FastHttpUser):
             if res.status_code == 404:
                 # file downloaded while deleted
                 res.success()
+            elif 200 <= res.status_code < 300:
+                res.success()
+            else:
+                res.failure(f'unexpected status code {res.status_code} {res.text}')
 
         self.client_request_retry(
             'get',
@@ -172,16 +176,20 @@ class BaseUser(FastHttpUser):
                     msg = f'{res.status_code}'
                 if retry:
                     if attempt < max_attempts:
-                        res.failure(f'client_request_retry: {client_method}: {msg} ({attempt}/{max_attempts})')
+                        res.failure(f'{msg} ({attempt}/{max_attempts})')
                         sleep_time = min(backoff[1], backoff[0] * (backoff[2] ** (attempt - 1)))
                         gevent.sleep(sleep_time)
                         continue
                     else:
-                        res.failure(f'client_request_retry: {client_method}: {msg} (exceeded max attempts {max_attempts})')
+                        res.failure(f'{msg} (exceeded max attempts {max_attempts})')
                         last_error_msg = f'{msg}\n{res.status_code} {res.text}'
                         break
                 else:
                     if pre_return_hook:
                         pre_return_hook(res)
+                    elif 200 <= res.status_code < 300:
+                        res.success()
+                    else:
+                        res.failure(f'unexpected status code {res.status_code} {res.text}')
                     return res.status_code, res.text
-        raise Exception(f'client_request_retry: exceeded max attempts {max_attempts}: {last_error_msg}')
+        raise Exception(f'client_request_retry exceeded max attempts {max_attempts}: {last_error_msg}')
