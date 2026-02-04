@@ -9,4 +9,4 @@ async def main():
 @main.command()
 async def cleanup():
     from . import cleanup
-    cleanup.main()
+    await cleanup.main()

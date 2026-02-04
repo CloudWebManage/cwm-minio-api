@@ -12,5 +12,7 @@ if config.CWM_UPDOWNDEL_ENABLED:
 
 @events.test_start.add_listener
 def on_test_start(environment, **kwargs):
+    print('on_test_start')
+    environment.shared_state = shared_state.SharedState()
     if isinstance(environment.runner, (MasterRunner,LocalRunner)):
-        shared_state.clear()
+        environment.shared_state.clear()
