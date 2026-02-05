@@ -151,10 +151,6 @@ class BaseUser(FastHttpUser):
         self.update_tenant_info()
         self.create_instance()
 
-    def on_stop(self):
-        teardown_instance(self.shared_state, self.instance_id, self.client_request_retry, debug=self.debug)
-        gevent.sleep(5)
-
     def download_from_bucket_filename(self, bucket_name, filename, is_public=False, use_bucket_url=True, instance=None):
         if instance:
             instance_id, access, secret = instance

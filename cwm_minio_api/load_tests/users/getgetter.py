@@ -45,6 +45,3 @@ class GetGetter(BaseUser):
     def on_start(self):
         self.debug(f'GetGetter on_start')
         self.update_tenant_info()
-
-    def on_stop(self):
-        pass
