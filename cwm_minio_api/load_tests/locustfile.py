@@ -1,3 +1,5 @@
+import logging
+
 from gevent import monkey, sleep
 monkey.patch_all()
 
@@ -23,21 +25,21 @@ def independent_client_request_retry(method, path, params, auth, **kwargs):
     url = f'https://{config.CWM_MINIO_API_HOST}/{path}'
     res = requests.request(method, url, params=params, auth=auth)
     if res.status_code < 200 or res.status_code >= 300:
-        print(f'Error during client request {method} {path} {params}: {res.status_code} {res.text}')
+        logging.error(f'Error during client request {method} {path} {params}: {res.status_code} {res.text}')
 
 
 @events.test_stop.add_listener
 def on_stop(environment, **kwargs):
     if isinstance(environment.runner, (MasterRunner, LocalRunner)):
         updowndel_started = environment.shared_state.counter_get('updowndel_started')
+        logging.info(f'master waiting for {updowndel_started} users to stop...')
         while updowndel_started > environment.shared_state.counter_get('updowndel_stopped'):
-            print('master waiting for all users to stop...')
             sleep(1)
-        print('all users stopped, starting teardown...')
+        logging.info('all users stopped, starting teardown...')
         instance_ids = environment.shared_state.get_instance_ids(ttl_seconds=0)
         for instance_id in instance_ids:
             teardown_instance(environment.shared_state, instance_id, independent_client_request_retry)
-        print(f'test teardown complete, {len(instance_ids)} instances deleted.')
+        logging.info(f'test teardown complete, {len(instance_ids)} instances deleted.')
 
 
 class CwmLoadTestShape(LoadTestShape):

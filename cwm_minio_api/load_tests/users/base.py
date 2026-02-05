@@ -2,6 +2,7 @@ import uuid
 import hashlib
 import traceback
 import json
+import logging
 
 import gevent
 from locust import FastHttpUser
@@ -97,7 +98,7 @@ class BaseUser(FastHttpUser):
 
     def debug(self, *args, **kwargs):
         if self.debug_enabled:
-            print(*args, **kwargs)
+            logging.info(*args, **kwargs)
 
     @property
     def minio_api_url(self):
@@ -108,7 +109,7 @@ class BaseUser(FastHttpUser):
 
     def create_instance(self):
         self.instance_id = generate_instance_id()
-        self.debug(f'Creating instance: {self.instance_id}')
+        logging.info(f'Creating instance: {self.instance_id}')
         _, res_text = self.client_request_retry(
             'post',
             "/instances/create",
@@ -120,11 +121,12 @@ class BaseUser(FastHttpUser):
         instance = json.loads(res_text)
         self.instance_access_key = instance["access_key"]
         self.instance_secret_key = instance["secret_key"]
+        logging.info(f'Instance created: {self.instance_id} (access_key={self.instance_access_key} secret_key={self.instance_secret_key})')
         self.shared_state.add_instance(self.instance_id, self.instance_access_key, self.instance_secret_key)
 
     def create_bucket(self, public=False):
         bucket_name = generate_bucket_name(public)
-        self.debug(f'Creating bucket: {bucket_name} (public={public},instance={self.instance_id})')
+        logging.info(f'Creating bucket: {bucket_name} (public={public},instance={self.instance_id})')
         self.client_request_retry(
             'post',
             "/buckets/create",
