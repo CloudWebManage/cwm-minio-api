@@ -57,7 +57,7 @@ class UpDownDel(BaseUser):
             url,
             headers=dict(request.headers),
             data=body,
-            name='upload_to_bucket',
+            name=f'upload_to_bucket({content_length})',
         )
         self.shared_state.add_file(self.instance_id, bucket_name, filename, content_length)
         return filename

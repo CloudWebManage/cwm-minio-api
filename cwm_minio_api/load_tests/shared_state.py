@@ -157,6 +157,14 @@ class SharedState:
                 res.append(filename)
         return res
 
+    def get_filename_content_length(self, instance_id, bucket_name, filename):
+        self.update_from_redis()
+        filedata = self.instance_bucket_files.get(instance_id, {}).get(bucket_name, {}).get(filename)
+        if filedata:
+            return filedata[0]
+        else:
+            return None
+
     def is_filename_exists(self, instance_id, bucket_name, filename):
         self.update_from_redis()
         return filename in self.instance_bucket_files.get(instance_id, {}).get(bucket_name, {})

@@ -160,6 +160,8 @@ class BaseUser(FastHttpUser):
             instance_id, access, secret = instance
         else:
             instance_id, access, secret = (self.instance_id, self.instance_access_key, self.instance_secret_key)
+        suffix = 'public' if is_public else 'private'
+        content_length = self.shared_state.get_filename_content_length(instance_id, bucket_name, filename)
         if use_bucket_url:
             url = self.get_minio_bucket_api_url(bucket_name)
         else:
@@ -183,7 +185,7 @@ class BaseUser(FastHttpUser):
             headers=headers,
             should_retry=should_retry,
             pre_return_hook=download_from_bucket_filename_pre_return_hook,
-            name='download_from_bucket'
+            name=f'download_from_bucket({suffix},{content_length})',
         )
 
     def client_request_retry(self, client_method, *args, max_attempts=10, backoff=(1, 20, 2), should_retry=None, pre_return_hook=None, **kwargs):
