@@ -1,10 +1,11 @@
 import os
-import json
 
 from dotenv import load_dotenv
 
 
 load_dotenv()
+
+CWM_LOAD_TESTS_DEBUG = os.getenv("CWM_LOAD_TESTS_DEBUG", "no").lower() == "yes"
 
 CWM_MINIO_API_HOST = os.getenv("CWM_MINIO_API_HOST")
 CWM_MINIO_API_USERNAME = os.getenv("CWM_MINIO_API_USERNAME")
@@ -17,6 +18,9 @@ CWM_INSTANCE_SECRET_KEY = os.getenv("CWM_INSTANCE_SECRET_KEY")
 CWM_KEEP_INSTANCE = os.getenv("CWM_KEEP_INSTANCE", "").lower() == "yes"
 CWM_KEEP_BUCKETS = os.getenv("CWM_KEEP_BUCKETS", "").lower() == "yes"
 
+# waits for all updowndel users to finish on_start and then stops them and starts getgetter users
+# this only works if: there is more than one user type enabled, including updowndel, and updowndel has fixed_count
+CWM_UPDOWNDEL_SEPARATE_FROM_OTHER_USERS = os.getenv("CWM_UPDOWNDEL_SEPARATE_FROM_OTHER_USERS", "no").lower() == "yes"
 CWM_UPDOWNDEL_ENABLED = os.getenv("CWM_UPDOWNDEL_ENABLED", "yes").lower() == "yes"
 CWM_UPDOWNDEL_USER_WEIGHT = int(os.getenv("CWM_UPDOWNDEL_USER_WEIGHT", "1"))
 CWM_UPDOWNDEL_FIXED_COUNT = int(os.getenv("CWM_UPDOWNDEL_FIXED_COUNT", "0"))
@@ -31,8 +35,9 @@ CWM_UPDOWNDEL_CONTENT_LENGTH_WEIGHTS = os.getenv("CWM_UPDOWNDEL_CONTENT_LENGTH_W
 CWM_UPDOWNDEL_CONTENT_LENGTH_WEIGHTS = [int(x.strip()) for x in CWM_UPDOWNDEL_CONTENT_LENGTH_WEIGHTS.split(",") if x.strip()]
 CWM_UPDOWNDEL_MAX_FILES_PER_BUCKET = int(os.getenv("CWM_UPDOWNDEL_MAX_FILES_PER_BUCKET", "10"))
 CWM_UPDOWNDEL_MIN_FILES_PER_BUCKET = int(os.getenv("CWM_UPDOWNDEL_MIN_FILES_PER_BUCKET", "5"))
-CWM_UPDOWNDEL_NUM_BUCKETS = int(os.getenv("CWM_UPDOWNDEL_NUM_BUCKETS", "2"))
 CWM_UPDOWNDEL_CONCURRENCY = int(os.getenv("CWM_UPDOWNDEL_CONCURRENCY", "10"))
+CWM_UPDOWNDEL_ON_START_NUM_BUCKETS = int(os.getenv("CWM_UPDOWNDEL_ON_START_NUM_BUCKETS", "2"))
+CWM_UPDOWNDEL_ON_START_NUM_FILES_PER_BUCKET = int(os.getenv("CWM_UPDOWNDEL_ON_START_NUM_FILES_PER_BUCKET", "3"))
 
 CWM_GETGETTER_ENABLED = os.getenv("CWM_GETGETTER_ENABLED", "yes").lower() == "yes"
 CWM_GETGETTER_USER_WEIGHT = int(os.getenv("CWM_GETGETTER_USER_WEIGHT", "1"))

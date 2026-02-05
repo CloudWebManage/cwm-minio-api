@@ -10,6 +10,7 @@ from . import config
 class SharedState:
     def __init__(self):
         self.redis = Redis(config.SHARED_STATE_REDIS_HOST, config.SHARED_STATE_REDIS_PORT)
+        self.debug_enabled = config.CWM_LOAD_TESTS_DEBUG
         self.key_prefix = 'cwm-minio-api:load-tests'
         self.instances = {}
         self.instance_buckets = {}
@@ -17,13 +18,23 @@ class SharedState:
         self.last_redis_update_ts = None
         self.updating_from_redis = False
 
+    def debug(self, *args, **kwargs):
+        if self.debug_enabled:
+            print(*args, **kwargs)
+
     def clear(self):
-        print('Clearing shared state in Redis...')
+        self.debug('Clearing shared state in Redis...')
         self.redis.flushdb()
-        print('Shared state cleared.')
+        self.debug('Shared state cleared.')
 
     def get_timestamp(self):
         return int(time.time())
+
+    def counter_incr(self, name):
+        self.redis.incr(f'{self.key_prefix}:counters:{name}')
+
+    def counter_get(self, name):
+        return int(self.redis.get(f'{self.key_prefix}:counters:{name}') or 0)
 
     def seconds_since(self, past_timestamp, now=None):
         if not now:
@@ -35,7 +46,7 @@ class SharedState:
         if not self.updating_from_redis and (self.last_redis_update_ts is None or self.seconds_since(self.last_redis_update_ts) > ttl_seconds):
             self.updating_from_redis = True
             try:
-                print('Updating shared state from Redis...')
+                self.debug('Updating shared state from Redis...')
                 for instance_id in self.redis.smembers(f'{self.key_prefix}:instances'):
                     instance_id = instance_id.decode('utf-8')
                     access, secret, ts = self.redis.get(f'{self.key_prefix}:instances:{instance_id}').decode('utf-8').split(':')

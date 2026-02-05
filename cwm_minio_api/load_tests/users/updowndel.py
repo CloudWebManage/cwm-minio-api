@@ -26,9 +26,24 @@ class UpDownDel(BaseUser):
 
     def on_start(self):
         super().on_start()
-        for i in range(config.CWM_UPDOWNDEL_NUM_BUCKETS):
+        self.debug(f'UpDownDel on_start (instance_id: {self.instance_id})')
+        bucket_names = set()
+        for i in range(config.CWM_UPDOWNDEL_ON_START_NUM_BUCKETS):
             is_public = random.choices([True, False], weights=[config.CWM_UPDOWNDEL_PUBLIC_WEIGHT, config.CWM_UPDOWNDEL_PRIVATE_WEIGHT], k=1)[0]
-            self.create_bucket(public=is_public)
+            bucket_names.add(self.create_bucket(public=is_public))
+        self.debug(f'UpDownDel on_start (instance_id: {self.instance_id}): created {len(bucket_names)} buckets')
+        num_files = 0
+        for i in range(config.CWM_UPDOWNDEL_ON_START_NUM_FILES_PER_BUCKET):
+            for bucket_name in bucket_names:
+                content_length = random.choices(config.CWM_UPDOWNDEL_CONTENT_LENGTH_VALUES, weights=config.CWM_UPDOWNDEL_CONTENT_LENGTH_WEIGHTS, k=1)[0]
+                self.upload_to_bucket(bucket_name, content_length)
+                num_files += 1
+        self.debug(f'UpDownDel on_start (instance_id: {self.instance_id}): uploaded {num_files} files')
+        self.shared_state.counter_incr('updowndel_started')
+
+    def on_stop(self):
+        super().on_stop()
+        self.shared_state.counter_incr('updowndel_stopped')
 
     def upload_to_bucket(self, bucket_name, content_length):
         body = b"a" * content_length
@@ -42,6 +57,7 @@ class UpDownDel(BaseUser):
             url,
             headers=dict(request.headers),
             data=body,
+            name='upload_to_bucket',
         )
         self.shared_state.add_file(self.instance_id, bucket_name, filename, content_length)
         return filename
@@ -56,6 +72,7 @@ class UpDownDel(BaseUser):
             'delete',
             url,
             headers=dict(request.headers),
+            name='delete_from_bucket',
         )
 
     def delete_from_bucket_multi(self, bucket_name, filenames):
@@ -82,6 +99,7 @@ class UpDownDel(BaseUser):
             url,
             data=body.decode(),
             headers=dict(request.headers),
+            name='delete_from_bucket_multi',
         )
 
     def get_test_bucket_name(self):

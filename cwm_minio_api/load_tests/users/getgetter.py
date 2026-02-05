@@ -20,33 +20,31 @@ class GetGetter(BaseUser):
 
     @task
     def get(self):
-        self.assign_instance()
-        if self.instance_id:
+        instance_id, access, secret = self.get_instance()
+        if instance_id:
             is_public = random.choices([True, False], weights=[config.CWM_UPDOWNDEL_PUBLIC_WEIGHT, config.CWM_UPDOWNDEL_PRIVATE_WEIGHT], k=1)[0]
-            bucket_names = self.shared_state.get_bucket_names(self.instance_id, is_public)
+            bucket_names = self.shared_state.get_bucket_names(instance_id, is_public)
             if len(bucket_names) > 0:
                 bucket_name = random.choice(bucket_names)
-                filenames = self.shared_state.get_filenames(self.instance_id, bucket_name)
+                filenames = self.shared_state.get_filenames(instance_id, bucket_name)
                 if len(filenames) > 0:
                     filename = random.choice(filenames)
                     use_bucket_url = random.choices([True, False], weights=[100, 1], k=1)[0]
-                    self.download_from_bucket_filename(bucket_name, filename, is_public, use_bucket_url)
+                    self.download_from_bucket_filename(bucket_name, filename, is_public, use_bucket_url, instance=(instance_id, access, secret))
 
-    def assign_instance(self):
+    def get_instance(self):
         all_instance_ids = self.shared_state.get_instance_ids()
         if len(all_instance_ids) > 0:
-            if self.num_all_instances != len(all_instance_ids):
-                instance_id = random.choice(all_instance_ids)
-                instance = self.shared_state.get_instance(instance_id)
-                if instance:
-                    self.instance_access_key, self.instance_secret_key = instance
-                    self.instance_id = instance_id
-                    print(f'GetGetter using instance: {self.instance_id} (total instances: {len(all_instance_ids)})')
-                    self.num_all_instances = len(all_instance_ids)
+            instance_id = random.choice(all_instance_ids)
+            instance = self.shared_state.get_instance(instance_id)
+            if instance:
+                access, secret = instance
+                return instance_id, access, secret
+        return None, None, None
 
     def on_start(self):
+        self.debug(f'GetGetter on_start')
         self.update_tenant_info()
-        self.assign_instance()
 
     def on_stop(self):
         pass

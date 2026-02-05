@@ -21,6 +21,65 @@ def generate_bucket_name(public):
     return f"cmaltb{suffix}-{uuid.uuid4()}"
 
 
+def download_from_bucket_filename_pre_return_hook(res):
+    if res.status_code == 404:
+        # file downloaded while deleted
+        res.success()
+    elif 200 <= res.status_code < 300:
+        res.success()
+    else:
+        res.failure(f'unexpected status code {res.status_code} {res.text}')
+
+
+def teardown_instance(shared_state, instance_id, client_request_retry, debug=print):
+    errors = []
+    if not config.CWM_KEEP_BUCKETS:
+        debug("Deleting buckets...")
+        for public in [True, False]:
+            for bucket_name in shared_state.get_bucket_names(instance_id, public=public, ttl_seconds=0):
+                debug(f'Deleting bucket: {bucket_name} (instance={instance_id})')
+                try:
+                    client_request_retry(
+                        'delete',
+                        "/buckets/delete",
+                        params={"instance_id": instance_id, "bucket_name": bucket_name},
+                        auth=(config.CWM_MINIO_API_USERNAME, config.CWM_MINIO_API_PASSWORD),
+                        should_retry=lambda res: (
+                            res.status_code < 200 or res.status_code >= 300,
+                            f'Failed to delete bucket {bucket_name} in instance {instance_id}: {res.status_code} {res.text}'
+                        ),
+                        max_attempts=20,
+                        backoff=(1, 60, 2),
+                        name='on_stop_delete_bucket',
+                    )
+                    shared_state.delete_bucket(instance_id, bucket_name)
+                except Exception as e:
+                    errors.append(
+                        f'Error deleting bucket {bucket_name} in instance {instance_id}: {str(e)}\n{traceback.format_exc()}')
+    if not config.CWM_KEEP_INSTANCE and not config.CWM_KEEP_BUCKETS:
+        debug(f'Deleting instance: {instance_id}')
+        try:
+            client_request_retry(
+                'delete',
+                "/instances/delete",
+                params={"instance_id": instance_id},
+                auth=(config.CWM_MINIO_API_USERNAME, config.CWM_MINIO_API_PASSWORD),
+                should_retry=lambda res: (
+                    res.status_code < 200 or res.status_code >= 300,
+                    f'Failed to delete instance {instance_id}: {res.status_code} {res.text}'
+                ),
+                max_attempts=20,
+                backoff=(1, 60, 2),
+                name='on_stop_delete_instance',
+            )
+            shared_state.delete_instance(instance_id)
+        except Exception as e:
+            errors.append(f'Error deleting instance {instance_id}: {str(e)}\n{traceback.format_exc()}')
+    if errors:
+        raise Exception("Errors during teardown:\n" + "\n".join(errors))
+    debug("Teardown complete.")
+
+
 class BaseUser(FastHttpUser):
     host = f'https://{config.CWM_MINIO_API_HOST}'
     insecure = False
@@ -29,11 +88,16 @@ class BaseUser(FastHttpUser):
     def __init__(self, environment):
         super().__init__(environment)
         assert config.CWM_MINIO_API_USERNAME and config.CWM_MINIO_API_PASSWORD
+        self.debug_enabled = config.CWM_LOAD_TESTS_DEBUG
         self.shared_state = environment.shared_state
         self.instance_id = None
         self.instance_access_key = None
         self.instance_secret_key = None
         self.tenant_info = {}
+
+    def debug(self, *args, **kwargs):
+        if self.debug_enabled:
+            print(*args, **kwargs)
 
     @property
     def minio_api_url(self):
@@ -44,13 +108,14 @@ class BaseUser(FastHttpUser):
 
     def create_instance(self):
         self.instance_id = generate_instance_id()
-        print(f'Creating instance: {self.instance_id}')
+        self.debug(f'Creating instance: {self.instance_id}')
         _, res_text = self.client_request_retry(
             'post',
             "/instances/create",
             json={"instance_id": self.instance_id},
             auth=(config.CWM_MINIO_API_USERNAME, config.CWM_MINIO_API_PASSWORD),
             max_attempts=20,
+            name='create_instance',
         )
         instance = json.loads(res_text)
         self.instance_access_key = instance["access_key"]
@@ -59,13 +124,14 @@ class BaseUser(FastHttpUser):
 
     def create_bucket(self, public=False):
         bucket_name = generate_bucket_name(public)
-        print(f'Creating bucket: {bucket_name} (public={public},instance={self.instance_id})')
+        self.debug(f'Creating bucket: {bucket_name} (public={public},instance={self.instance_id})')
         self.client_request_retry(
             'post',
             "/buckets/create",
             json={"instance_id": self.instance_id, "bucket_name": bucket_name, "public": public},
             auth=(config.CWM_MINIO_API_USERNAME, config.CWM_MINIO_API_PASSWORD),
             max_attempts=20,
+            name='create_bucket',
         )
         bucket = {
             "created": True,
@@ -78,6 +144,7 @@ class BaseUser(FastHttpUser):
         self.tenant_info.update(**self.client.get(
             f'/tenant/info',
             auth=(config.CWM_MINIO_API_USERNAME, config.CWM_MINIO_API_PASSWORD),
+            name='get_tenant_info',
         ).json())
 
     def on_start(self):
@@ -85,51 +152,14 @@ class BaseUser(FastHttpUser):
         self.create_instance()
 
     def on_stop(self):
-        errors = []
-        if not config.CWM_KEEP_BUCKETS:
-            print("Deleting buckets...")
-            for public in [True, False]:
-                for bucket_name in self.shared_state.get_bucket_names(self.instance_id, public=public, ttl_seconds=0):
-                    print(f'Deleting bucket: {bucket_name} (instance={self.instance_id})')
-                    try:
-                        self.client_request_retry(
-                            'delete',
-                            "/buckets/delete",
-                            params={"instance_id": self.instance_id, "bucket_name": bucket_name},
-                            auth=(config.CWM_MINIO_API_USERNAME, config.CWM_MINIO_API_PASSWORD),
-                            should_retry=lambda res: (
-                                res.status_code < 200 or res.status_code >= 300,
-                                f'Failed to delete bucket {bucket_name} in instance {self.instance_id}: {res.status_code} {res.text}'
-                            ),
-                            max_attempts=20,
-                            backoff=(1, 60, 2),
-                        )
-                        self.shared_state.delete_bucket(self.instance_id, bucket_name)
-                    except Exception as e:
-                        errors.append(f'Error deleting bucket {bucket_name} in instance {self.instance_id}: {str(e)}\n{traceback.format_exc()}')
-        if not config.CWM_KEEP_INSTANCE and not config.CWM_KEEP_BUCKETS:
-            print(f'Deleting instance: {self.instance_id}')
-            try:
-                self.client_request_retry(
-                    'delete',
-                    "/instances/delete",
-                    params={"instance_id": self.instance_id},
-                    auth=(config.CWM_MINIO_API_USERNAME, config.CWM_MINIO_API_PASSWORD),
-                    should_retry=lambda res: (
-                        res.status_code < 200 or res.status_code >= 300,
-                        f'Failed to delete instance {self.instance_id}: {res.status_code} {res.text}'
-                    ),
-                    max_attempts=20,
-                    backoff=(1, 60, 2),
-                )
-                self.shared_state.delete_instance(self.instance_id)
-            except Exception as e:
-                errors.append(f'Error deleting instance {self.instance_id}: {str(e)}\n{traceback.format_exc()}')
-        if errors:
-            raise Exception("Errors during teardown:\n" + "\n".join(errors))
-        print("Teardown complete.")
+        teardown_instance(self.shared_state, self.instance_id, self.client_request_retry, debug=self.debug)
+        gevent.sleep(5)
 
-    def download_from_bucket_filename(self, bucket_name, filename, is_public=False, use_bucket_url=True):
+    def download_from_bucket_filename(self, bucket_name, filename, is_public=False, use_bucket_url=True, instance=None):
+        if instance:
+            instance_id, access, secret = instance
+        else:
+            instance_id, access, secret = (self.instance_id, self.instance_access_key, self.instance_secret_key)
         if use_bucket_url:
             url = self.get_minio_bucket_api_url(bucket_name)
         else:
@@ -138,30 +168,22 @@ class BaseUser(FastHttpUser):
         if not is_public:
             payload_hash = hashlib.sha256(b"").hexdigest()
             request = AWSRequest(method="GET", url=url, headers={"x-amz-content-sha256": payload_hash})
-            SigV4Auth(Credentials(self.instance_access_key, self.instance_secret_key), "s3", "us-east-1").add_auth(request)
+            SigV4Auth(Credentials(access, secret), "s3", "us-east-1").add_auth(request)
             headers=dict(request.headers)
 
         def should_retry(res):
             if res.status_code == 404:
-                if self.shared_state.is_filename_exists(self.instance_id, bucket_name, filename):
+                if self.shared_state.is_filename_exists(instance_id, bucket_name, filename):
                     return True, f'file not found'
             return False, None
-
-        def pre_return_hook(res):
-            if res.status_code == 404:
-                # file downloaded while deleted
-                res.success()
-            elif 200 <= res.status_code < 300:
-                res.success()
-            else:
-                res.failure(f'unexpected status code {res.status_code} {res.text}')
 
         self.client_request_retry(
             'get',
             url,
             headers=headers,
             should_retry=should_retry,
-            pre_return_hook=pre_return_hook,
+            pre_return_hook=download_from_bucket_filename_pre_return_hook,
+            name='download_from_bucket'
         )
 
     def client_request_retry(self, client_method, *args, max_attempts=10, backoff=(1, 20, 2), should_retry=None, pre_return_hook=None, **kwargs):
