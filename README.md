@@ -85,10 +85,10 @@ bin/migrate.sh --help
 
 ## Tests
 
-To run tests, start the DB container:
+To run tests, start the DB and Minio containers:
 
 ```
-docker compose up -d db
+docker compose up -d db minio
 ```
 
 Run tests with:

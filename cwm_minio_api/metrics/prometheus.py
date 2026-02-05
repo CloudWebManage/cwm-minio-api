@@ -8,11 +8,19 @@ MINIO_MC_CALLS_TOTAL = Counter(
     "Total MinIO mc CLI calls made by the API.",
     labelnames=("operation", "outcome"),
 )
-
 MINIO_MC_CALL_DURATION_SECONDS = Histogram(
     "cwm_minio_api_minio_mc_call_duration_seconds",
     "Duration of MinIO mc CLI calls made by the API.",
     labelnames=("operation",),
+)
+DB_CONN_ACQUIRE_TIME = Histogram(
+    "db_connection_acquire_seconds",
+    "Time spent acquiring DB connection",
+)
+DB_CONNS_TOTAL = Counter(
+    "db_connections_total",
+    "Total DB connections made",
+    labelnames=("outcome",),
 )
 
 
