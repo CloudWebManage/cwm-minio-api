@@ -15,7 +15,7 @@ async def connection_cursor(cur=None):
     if cur is None:
         start_time = time.perf_counter()
         try:
-            conn = await AsyncConnection.connect(conninfo=config.DB_CONNSTRING, connect_timeout=3)
+            conn = await AsyncConnection.connect(conninfo=config.DB_CONNSTRING)
             try:
                 async with conn.cursor(row_factory=dict_row) as cur:
                     DB_CONNS_TOTAL.labels(outcome="success").inc()
