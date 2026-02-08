@@ -19,7 +19,7 @@ async def connection_cursor(cur=None):
             try:
                 async with conn.cursor(row_factory=dict_row) as cur:
                     DB_CONNS_TOTAL.labels(outcome="success").inc()
-                    DB_CONN_ACQUIRE_TIME.observe(time.perf_counter() - start_time)
+                    DB_CONN_ACQUIRE_TIME.labels(outcome="success").observe(time.perf_counter() - start_time)
                     yield conn, cur
             finally:
                 await conn.close()
