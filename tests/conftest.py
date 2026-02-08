@@ -5,7 +5,6 @@ from uuid import uuid1
 
 import pytest
 
-from cwm_minio_api.db import get_async_connection_pool
 from cwm_minio_api.common import async_subprocess_check_call
 from cwm_minio_api.config import MINIO_MC_BINARY
 
@@ -20,7 +19,6 @@ logging.basicConfig(
 async def test_db(monkeypatch):
     db_name = f'cwm_test_{uuid1().hex}'
     monkeypatch.setattr('cwm_minio_api.config.DB_CONNSTRING', f'postgresql://postgres:123456@localhost/{db_name}')
-    monkeypatch.setattr('cwm_minio_api.db.pool', get_async_connection_pool())
     await async_subprocess_check_call('docker', 'compose', 'exec', '--user', 'postgres', 'db', 'createdb', db_name)
     try:
         await async_subprocess_check_call('bin/migrate.sh', 'up', env={

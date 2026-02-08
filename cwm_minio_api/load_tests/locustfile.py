@@ -40,29 +40,35 @@ def on_stop(environment, **kwargs):
         for instance_id in instance_ids:
             teardown_instance(environment.shared_state, instance_id, independent_client_request_retry)
         logging.info(f'test teardown complete, {len(instance_ids)} instances deleted.')
+        if hasattr(environment, 'cwm_load_test_shape_state'):
+            delattr(environment, 'cwm_load_test_shape_state')
+        environment.shared_state.clear()
+        logging.info('shared state cleared.')
 
 
 class CwmLoadTestShape(LoadTestShape):
     use_common_options = True
 
-    def __init__(self):
-        super().__init__()
-        self.updowndel_separate_initialized = False
-        self.updowndel_separate_scaled_down = False
-        self.num_users, self.spawn_rate = None, None
-
     def tick(self):
-        if self.num_users is None or self.spawn_rate is None:
-            self.num_users = self.runner.environment.parsed_options.users
-            self.spawn_rate = self.runner.environment.parsed_options.spawn_rate
-        num_users, spawn_rate = self.num_users, self.spawn_rate
+        if not hasattr(self.runner.environment, 'cwm_load_test_shape_state'):
+            self.runner.environment.cwm_load_test_shape_state = {
+                'updowndel_separate_initialized': False,
+                'updowndel_separate_scaled_down': False,
+                'num_users': None,
+                'spawn_rate': None,
+            }
+        state = self.runner.environment.cwm_load_test_shape_state
+        if state['num_users'] is None or state['spawn_rate'] is None:
+            state['num_users'] = self.runner.environment.parsed_options.users
+            state['spawn_rate'] = self.runner.environment.parsed_options.spawn_rate
+        num_users, spawn_rate = state['num_users'], state['spawn_rate']
         user_classes = set()
         if config.CWM_GETGETTER_ENABLED:
             user_classes.add(GetGetter)
         if config.CWM_UPDOWNDEL_ENABLED:
             user_classes.add(UpDownDel)
         if config.CWM_UPDOWNDEL_SEPARATE_FROM_OTHER_USERS:
-            if not self.updowndel_separate_initialized:
+            if not state['updowndel_separate_initialized']:
                 assert UpDownDel in user_classes and len(user_classes) > 1 and UpDownDel.fixed_count > 0
                 if not hasattr(self.runner.environment, 'shared_state') or self.runner.environment.shared_state.counter_get('updowndel_started') < UpDownDel.fixed_count:
                     # Initial spawn of fixed UpDownDel users
@@ -70,15 +76,15 @@ class CwmLoadTestShape(LoadTestShape):
                 else:
                     # Mark that initial UpDownDel users have been spawned
                     # Start scale down to 0 before starting other users
-                    self.updowndel_separate_initialized = True
+                    state['updowndel_separate_initialized'] = True
                     return 0, spawn_rate, [UpDownDel]
-            elif not self.updowndel_separate_scaled_down:
+            elif not state['updowndel_separate_scaled_down']:
                 if self.runner.user_count > 0:
                     # Scale down UpDownDel users to 0 first
                     return 0, spawn_rate, [UpDownDel]
                 else:
                     # all UpDownDel users scaled down to 0, now start other users
-                    self.updowndel_separate_scaled_down = True
+                    state['updowndel_separate_scaled_down'] = True
                     return num_users, spawn_rate, list(user_classes - {UpDownDel})
             else:
                 # All UpDownDel users scaled down to 0, run only other users
