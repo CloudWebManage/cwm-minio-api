@@ -109,7 +109,7 @@ Start locust:
 
 ```
 uv sync --all-extras
-locust -f cwm_minio_api/load_tests/locustfile.py
+locust -f cwm_minio_api/load_tests/locustfile.py --processes 2
 ```
 
 Start tests from the web UI:

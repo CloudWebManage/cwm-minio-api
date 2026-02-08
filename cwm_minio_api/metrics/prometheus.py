@@ -14,11 +14,11 @@ MINIO_MC_CALL_DURATION_SECONDS = Histogram(
     labelnames=("operation",),
 )
 DB_CONN_ACQUIRE_TIME = Histogram(
-    "db_connection_acquire_seconds",
+    "cwm_minio_api_db_connection_acquire_seconds",
     "Time spent acquiring DB connection",
 )
 DB_CONNS_TOTAL = Counter(
-    "db_connections_total",
+    "cwm_minio_api_db_connections_total",
     "Total DB connections made",
     labelnames=("outcome",),
 )
