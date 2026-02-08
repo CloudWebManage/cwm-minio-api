@@ -1,22 +1,29 @@
 from prometheus_client import CollectorRegistry, Counter, Histogram, REGISTRY, multiprocess
+from prometheus_client.utils import INF
 
 from .. import config
+
+
+DEFAULT_BUCKETS = (.5, 1.0, 5.0, 10.0, 20.0, 30.0, 60.0, 90.0, 120.0, 360.0, INF)
 
 
 MINIO_MC_CALLS_TOTAL = Counter(
     "cwm_minio_api_minio_mc_calls_total",
     "Total MinIO mc CLI calls made by the API.",
     labelnames=("operation", "outcome"),
+
 )
 MINIO_MC_CALL_DURATION_SECONDS = Histogram(
     "cwm_minio_api_minio_mc_call_duration_seconds",
     "Duration of MinIO mc CLI calls made by the API.",
     labelnames=("operation", "outcome"),
+    buckets=DEFAULT_BUCKETS,
 )
 DB_CONN_ACQUIRE_TIME = Histogram(
     "cwm_minio_api_db_connection_acquire_seconds",
     "Time spent acquiring DB connection",
     labelnames=("outcome",),
+    buckets=DEFAULT_BUCKETS,
 )
 DB_CONNS_TOTAL = Counter(
     "cwm_minio_api_db_connections_total",
