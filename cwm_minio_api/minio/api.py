@@ -25,6 +25,7 @@ async def mc_check_call(*args, return_output=False):
     logging.debug(f'mc_check_call({" ".join(args)})')
     op = _mc_operation_name(args)
     start = time.perf_counter()
+    outcome = 'error'
     try:
         proc = await asyncio.create_subprocess_exec(
             config.MINIO_MC_BINARY,
@@ -36,6 +37,7 @@ async def mc_check_call(*args, return_output=False):
         stdout = stdout.decode().strip()
         logging.debug(f'mc_check_call({" ".join(args)}): {stdout}')
         assert proc.returncode == 0, stdout
+        outcome = 'success'
         try:
             MINIO_MC_CALLS_TOTAL.labels(operation=op, outcome="success").inc()
         except Exception:
@@ -49,7 +51,7 @@ async def mc_check_call(*args, return_output=False):
         raise
     finally:
         try:
-            MINIO_MC_CALL_DURATION_SECONDS.labels(operation=op).observe(time.perf_counter() - start)
+            MINIO_MC_CALL_DURATION_SECONDS.labels(operation=op, outcome=outcome).observe(time.perf_counter() - start)
         except Exception:
             pass
 

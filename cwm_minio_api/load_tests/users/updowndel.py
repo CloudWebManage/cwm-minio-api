@@ -36,8 +36,8 @@ class UpDownDel(BaseUser):
         for i in range(config.CWM_UPDOWNDEL_ON_START_NUM_FILES_PER_BUCKET):
             for bucket_name in bucket_names:
                 content_length = random.choices(config.CWM_UPDOWNDEL_CONTENT_LENGTH_VALUES, weights=config.CWM_UPDOWNDEL_CONTENT_LENGTH_WEIGHTS, k=1)[0]
-                self.upload_to_bucket(bucket_name, content_length)
-                num_files += 1
+                if self.upload_to_bucket(bucket_name, content_length):
+                    num_files += 1
         self.debug(f'UpDownDel on_start (instance_id: {self.instance_id}): uploaded {num_files} files')
         self.shared_state.counter_incr('updowndel_started')
 
@@ -52,15 +52,18 @@ class UpDownDel(BaseUser):
         payload_hash = hashlib.sha256(body).hexdigest()
         request = AWSRequest(method="PUT", url=url, data=body, headers={"x-amz-content-sha256": payload_hash})
         SigV4Auth(Credentials(self.instance_access_key, self.instance_secret_key), "s3", "us-east-1").add_auth(request)
-        self.client_request_retry(
+        status_code, text = self.client_request_retry(
             'put',
             url,
             headers=dict(request.headers),
             data=body,
             name=f'upload_to_bucket({content_length})',
         )
-        self.shared_state.add_file(self.instance_id, bucket_name, filename, content_length)
-        return filename
+        if status_code == 200:
+            self.shared_state.add_file(self.instance_id, bucket_name, filename, content_length)
+            return filename
+        else:
+            return None
 
     def delete_from_bucket(self, bucket_name, filename):
         self.shared_state.delete_file(self.instance_id, bucket_name, filename)

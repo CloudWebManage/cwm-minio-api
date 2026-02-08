@@ -117,6 +117,7 @@ class BaseUser(FastHttpUser):
             auth=(config.CWM_MINIO_API_USERNAME, config.CWM_MINIO_API_PASSWORD),
             max_attempts=20,
             name='create_instance',
+            raise_exceptions=True,
         )
         instance = json.loads(res_text)
         self.instance_access_key = instance["access_key"]
@@ -134,6 +135,7 @@ class BaseUser(FastHttpUser):
             auth=(config.CWM_MINIO_API_USERNAME, config.CWM_MINIO_API_PASSWORD),
             max_attempts=20,
             name='create_bucket',
+            raise_exceptions=True,
         )
         bucket = {
             "created": True,
@@ -186,7 +188,7 @@ class BaseUser(FastHttpUser):
             name=f'download_from_bucket({suffix},{content_length})',
         )
 
-    def client_request_retry(self, client_method, *args, max_attempts=10, backoff=(1, 20, 2), should_retry=None, pre_return_hook=None, **kwargs):
+    def client_request_retry(self, client_method, *args, max_attempts=10, backoff=(1, 20, 2), should_retry=None, pre_return_hook=None, raise_exceptions=False, **kwargs):
         last_error_msg = None
         for attempt in range(1, max_attempts + 1):
             with getattr(self.client, client_method)(*args, catch_response=True, **kwargs) as res:
@@ -210,6 +212,8 @@ class BaseUser(FastHttpUser):
                         pre_return_hook(res)
                     elif 200 <= res.status_code < 300:
                         res.success()
+                    elif raise_exceptions:
+                        raise Exception(f'unexpected status code {res.status_code} {res.text}')
                     else:
                         res.failure(f'unexpected status code {res.status_code} {res.text}')
                     return res.status_code, res.text
