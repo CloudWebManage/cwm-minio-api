@@ -16,7 +16,7 @@ from cwm_minio_api.load_tests import config, shared_state
 @events.test_start.add_listener
 def on_test_start(environment, **kwargs):
     environment.shared_state = shared_state.SharedState()
-    if isinstance(environment.runner, (MasterRunner,LocalRunner)):
+    if isinstance(environment.runner, (MasterRunner,LocalRunner)) and not config.CWM_INIT_FROM_REDIS:
         environment.shared_state.clear()
     environment.num_updowndel_onstart_completed = 0
 
@@ -40,10 +40,11 @@ def on_stop(environment, **kwargs):
         for instance_id in instance_ids:
             teardown_instance(environment.shared_state, instance_id, independent_client_request_retry)
         logging.info(f'test teardown complete, {len(instance_ids)} instances deleted.')
+        if not config.CWM_KEEP_REDIS_DATA:
+            environment.shared_state.clear()
+            logging.info('shared state cleared.')
         if hasattr(environment, 'cwm_load_test_shape_state'):
             delattr(environment, 'cwm_load_test_shape_state')
-        environment.shared_state.clear()
-        logging.info('shared state cleared.')
 
 
 class CwmLoadTestShape(LoadTestShape):

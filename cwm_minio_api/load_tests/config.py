@@ -15,8 +15,10 @@ CWM_INSTANCE_ID = os.getenv("CWM_INSTANCE_ID")
 CWM_INSTANCE_ACCESS_KEY = os.getenv("CWM_INSTANCE_ACCESS_KEY")
 CWM_INSTANCE_SECRET_KEY = os.getenv("CWM_INSTANCE_SECRET_KEY")
 
+CWM_INIT_FROM_REDIS = os.getenv("CWM_INIT_FROM_REDIS", "").lower() == "yes"
 CWM_KEEP_INSTANCE = os.getenv("CWM_KEEP_INSTANCE", "").lower() == "yes"
 CWM_KEEP_BUCKETS = os.getenv("CWM_KEEP_BUCKETS", "").lower() == "yes"
+CWM_KEEP_REDIS_DATA = os.getenv("CWM_KEEP_REDIS_DATA", "").lower() == "yes"
 
 # waits for all updowndel users to finish on_start and then stops them and starts getgetter users
 # this only works if: there is more than one user type enabled, including updowndel, and updowndel has fixed_count

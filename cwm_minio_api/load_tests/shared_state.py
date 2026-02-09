@@ -17,6 +17,9 @@ class SharedState:
         self.instance_bucket_files = {}
         self.last_redis_update_ts = None
         self.updating_from_redis = False
+        if config.CWM_INIT_FROM_REDIS:
+            print('Initializing shared state from Redis...')
+            self.update_from_redis()
 
     def debug(self, *args, **kwargs):
         if self.debug_enabled:
