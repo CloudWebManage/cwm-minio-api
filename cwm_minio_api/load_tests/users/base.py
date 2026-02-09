@@ -155,7 +155,7 @@ class BaseUser(FastHttpUser):
         self.update_tenant_info()
         self.create_instance()
 
-    def download_from_bucket_filename(self, bucket_name, filename, is_public=False, use_bucket_url=True, instance=None):
+    def download_from_bucket_filename(self, bucket_name, filename, is_public=False, use_bucket_url=True, instance=None, stream=False):
         if instance:
             instance_id, access, secret = instance
         else:
@@ -186,12 +186,13 @@ class BaseUser(FastHttpUser):
             should_retry=should_retry,
             pre_return_hook=download_from_bucket_filename_pre_return_hook,
             name=f'download_from_bucket({suffix},{content_length})',
+            stream=stream,
         )
 
-    def client_request_retry(self, client_method, *args, max_attempts=10, backoff=(1, 20, 2), should_retry=None, pre_return_hook=None, raise_exceptions=False, **kwargs):
+    def client_request_retry(self, client_method, *args, max_attempts=10, backoff=(1, 20, 2), should_retry=None, pre_return_hook=None, raise_exceptions=False, stream=False, **kwargs):
         last_error_msg = None
         for attempt in range(1, max_attempts + 1):
-            with getattr(self.client, client_method)(*args, catch_response=True, **kwargs) as res:
+            with getattr(self.client, client_method)(*args, catch_response=True, stream=stream, **kwargs) as res:
                 if should_retry:
                     retry, msg = should_retry(res)
                 else:
@@ -216,5 +217,10 @@ class BaseUser(FastHttpUser):
                         raise Exception(f'unexpected status code {res.status_code} {res.text}')
                     else:
                         res.failure(f'unexpected status code {res.status_code} {res.text}')
-                    return res.status_code, res.text
+                    if stream:
+                        for _ in res.iter_content(chunk_size=8192):
+                            pass
+                        return res.status_code, ''
+                    else:
+                        return res.status_code, res.text
         raise Exception(f'client_request_retry exceeded max attempts {max_attempts}: {last_error_msg}')

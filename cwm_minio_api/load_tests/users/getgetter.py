@@ -30,7 +30,10 @@ class GetGetter(BaseUser):
                 if len(filenames) > 0:
                     filename = random.choice(filenames)
                     use_bucket_url = random.choices([True, False], weights=[100, 1], k=1)[0]
-                    self.download_from_bucket_filename(bucket_name, filename, is_public, use_bucket_url, instance=(instance_id, access, secret))
+                    self.download_from_bucket_filename(
+                        bucket_name, filename, is_public, use_bucket_url, instance=(instance_id, access, secret),
+                        stream=True
+                    )
 
     def get_instance(self):
         all_instance_ids = self.shared_state.get_instance_ids()
