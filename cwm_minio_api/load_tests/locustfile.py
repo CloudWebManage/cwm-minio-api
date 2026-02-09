@@ -16,7 +16,7 @@ from cwm_minio_api.load_tests.shared_state import SharedState
 
 @events.test_start.add_listener
 def on_test_start(environment, **kwargs):
-    shared_state = SharedState.get_instance()
+    shared_state = SharedState.get_singleton()
     if isinstance(environment.runner, (MasterRunner,LocalRunner)) and not config.CWM_INIT_FROM_REDIS:
         shared_state.clear()
     environment.num_updowndel_onstart_completed = 0
@@ -32,7 +32,7 @@ def independent_client_request_retry(method, path, params, auth, **kwargs):
 @events.test_stop.add_listener
 def on_stop(environment, **kwargs):
     if isinstance(environment.runner, (MasterRunner, LocalRunner)):
-        shared_state = SharedState.get_instance()
+        shared_state = SharedState.get_singleton()
         updowndel_started = shared_state.counter_get('updowndel_started')
         logging.info(f'master waiting for {updowndel_started} users to stop...')
         while updowndel_started > shared_state.counter_get('updowndel_stopped'):
@@ -61,7 +61,7 @@ class CwmLoadTestShape(LoadTestShape):
                 'spawn_rate': None,
             }
         state = self.runner.environment.cwm_load_test_shape_state
-        shared_state = SharedState.get_instance()
+        shared_state = SharedState.get_singleton()
         if state['num_users'] is None or state['spawn_rate'] is None:
             state['num_users'] = self.runner.environment.parsed_options.users
             state['spawn_rate'] = self.runner.environment.parsed_options.spawn_rate
