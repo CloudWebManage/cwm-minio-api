@@ -24,18 +24,30 @@ class SharedState:
         self.instance_bucket_files = {}
         self.last_redis_update_ts = None
         self.updating_from_redis = False
-        if config.CWM_INIT_FROM_REDIS:
-            logging.info('Initializing shared state from Redis...')
-            self.update_from_redis()
+        self.disable_update_from_redis = False
+
+    def export(self, filename):
+        self.last_redis_update_ts = None
+        self.updating_from_redis = False
+        config.CWM_INIT_FROM_REDIS = False
+        config.CWM_INIT_FROM_JSON_FILE = None
+        self.update_from_redis()
+        with open(filename, 'w') as f:
+            json.dump({
+                'instances': self.instances,
+                'instance_buckets': self.instance_buckets,
+                'instance_bucket_files': self.instance_bucket_files,
+            }, f)
 
     def debug(self, *args, **kwargs):
         if self.debug_enabled:
             logging.info(*args, **kwargs)
 
     def clear(self):
-        self.debug('Clearing shared state in Redis...')
-        self.redis.flushdb()
-        self.debug('Shared state cleared.')
+        if not config.CWM_KEEP_REDIS_DATA:
+            self.debug('Clearing shared state in Redis...')
+            self.redis.flushdb()
+            self.debug('Shared state cleared.')
 
     def get_timestamp(self):
         return int(time.time())
@@ -51,34 +63,58 @@ class SharedState:
             now = self.get_timestamp()
         return int(now) - int(past_timestamp)
 
+    def update_from_file(self, filename):
+        with open(filename, 'r') as f:
+            data = json.load(f)
+            self.instances = data.get('instances', {})
+            self.instance_buckets = data.get('instance_buckets', {})
+            self.instance_bucket_files = data.get('instance_bucket_files', {})
+
     def update_from_redis(self):
-        ttl_seconds = 5 if len(self.instances) < 1 else random.randint(240,360)
-        if not self.updating_from_redis and (self.last_redis_update_ts is None or self.seconds_since(self.last_redis_update_ts) > ttl_seconds):
-            self.updating_from_redis = True
-            try:
-                self.debug('Updating shared state from Redis...')
-                for instance_id in self.redis.smembers(f'{self.key_prefix}:instances'):
-                    instance_id = instance_id.decode('utf-8')
-                    access, secret, ts = self.redis.get(f'{self.key_prefix}:instances:{instance_id}').decode('utf-8').split(':')
-                    self.instances[instance_id] = access, secret, ts
-                    for suffix in ['public', 'private']:
-                        buckets_key = f'{self.key_prefix}:instances:{instance_id}:buckets:{suffix}'
-                        for bucket_name in self.redis.smembers(buckets_key):
-                            bucket_name = bucket_name.decode('utf-8')
-                            bucket_data = self.redis.get(f'{buckets_key}:{bucket_name}')
-                            if bucket_data:
-                                bucket = json.loads(bucket_data)
-                                self.instance_buckets.setdefault(instance_id, {}).setdefault(suffix, {})[bucket_name] = bucket
-                                files_key = f'{self.key_prefix}:instances:{instance_id}:buckets:{bucket_name}:files'
-                                for filename in self.redis.smembers(files_key):
-                                    filename = filename.decode('utf-8')
-                                    file_data = self.redis.get(f'{files_key}:{filename}')
-                                    if file_data:
-                                        content_length, ts = file_data.decode('utf-8').split(':')
-                                        self.instance_bucket_files.setdefault(instance_id, {}).setdefault(bucket_name, {})[filename] = content_length, ts
-                self.last_redis_update_ts = self.get_timestamp()
-            finally:
-                self.updating_from_redis = False
+        if not self.disable_update_from_redis:
+            if config.CWM_INIT_FROM_REDIS:
+                self.disable_update_from_redis = True
+                should_update = True
+            elif config.CWM_INIT_FROM_JSON_FILE:
+                should_update = False
+                self.disable_update_from_redis = True
+                self.update_from_file(config.CWM_INIT_FROM_JSON_FILE)
+            else:
+                ttl_seconds = 5 if len(self.instances) < 1 else random.randint(240,360)
+                should_update = not self.updating_from_redis and (self.last_redis_update_ts is None or self.seconds_since(self.last_redis_update_ts) > ttl_seconds)
+            if should_update:
+                self.updating_from_redis = True
+                try:
+                    self.debug('Updating shared state from Redis...')
+                    instance_ids = list(self.redis.smembers(f'{self.key_prefix}:instances'))
+                    self.debug(f'Found {len(instance_ids)} instances in Redis')
+                    for instance_id in instance_ids:
+                        instance_id = instance_id.decode('utf-8')
+                        access, secret, ts = self.redis.get(f'{self.key_prefix}:instances:{instance_id}').decode('utf-8').split(':')
+                        self.instances[instance_id] = access, secret, ts
+                        for suffix in ['public', 'private']:
+                            buckets_key = f'{self.key_prefix}:instances:{instance_id}:buckets:{suffix}'
+                            bucket_names = list(self.redis.smembers(buckets_key))
+                            self.debug(f'Found {len(bucket_names)} {suffix} buckets for instance {instance_id} in Redis')
+                            for bucket_name in bucket_names:
+                                bucket_name = bucket_name.decode('utf-8')
+                                bucket_data = self.redis.get(f'{buckets_key}:{bucket_name}')
+                                if bucket_data:
+                                    bucket = json.loads(bucket_data)
+                                    self.instance_buckets.setdefault(instance_id, {}).setdefault(suffix, {})[bucket_name] = bucket
+                                    files_key = f'{self.key_prefix}:instances:{instance_id}:buckets:{bucket_name}:files'
+                                    filenames = list(self.redis.smembers(files_key))
+                                    self.debug(f'Found {len(filenames)} files for bucket {bucket_name} of instance {instance_id} in Redis')
+                                    for filename in filenames:
+                                        filename = filename.decode('utf-8')
+                                        file_data = self.redis.get(f'{files_key}:{filename}')
+                                        if file_data:
+                                            content_length, ts = file_data.decode('utf-8').split(':')
+                                            self.instance_bucket_files.setdefault(instance_id, {}).setdefault(bucket_name, {})[filename] = content_length, ts
+                    self.last_redis_update_ts = self.get_timestamp()
+                    self.debug(f'shared state update from Redis complete, last_redis_update_ts={self.last_redis_update_ts}')
+                finally:
+                    self.updating_from_redis = False
 
     def add_instance(self, instance_id, instance_access_key, instance_secret_key):
         now = self.get_timestamp()

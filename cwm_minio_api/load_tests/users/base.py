@@ -96,6 +96,7 @@ class BaseUser(FastHttpUser):
         self.instance_access_key = None
         self.instance_secret_key = None
         self.tenant_info = {}
+        self.debug(f'{self.__class__.__name__} initialized')
 
     def debug(self, *args, **kwargs):
         if self.debug_enabled:
@@ -161,12 +162,14 @@ class BaseUser(FastHttpUser):
             instance_id, access, secret = instance
         else:
             instance_id, access, secret = (self.instance_id, self.instance_access_key, self.instance_secret_key)
-        suffix = 'public' if is_public else 'private'
+        log_suffix = 'public' if is_public else 'private'
         content_length = self.shared_state.get_filename_content_length(instance_id, bucket_name, filename)
         if use_bucket_url:
-            url = self.get_minio_bucket_api_url(bucket_name)
+            base_url = self.get_minio_bucket_api_url(bucket_name)
+            log_suffix += ',bucket_url'
         else:
-            url = f'{self.minio_api_url}/{bucket_name}/{filename}'
+            base_url = f'{self.minio_api_url}/{bucket_name}'
+        url = f'{base_url}/{filename}'
         headers = {}
         if not is_public:
             payload_hash = hashlib.sha256(b"").hexdigest()
@@ -186,7 +189,7 @@ class BaseUser(FastHttpUser):
             headers=headers,
             should_retry=should_retry,
             pre_return_hook=download_from_bucket_filename_pre_return_hook,
-            name=f'download_from_bucket({suffix},{content_length})',
+            name=f'download_from_bucket({log_suffix},{content_length})',
             stream=stream,
         )
 

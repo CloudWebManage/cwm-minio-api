@@ -46,4 +46,6 @@ class GetGetter(BaseUser):
         return None, None, None
 
     def on_start(self):
+        self.debug("GetGetter on_start")
         self.update_tenant_info()
+        self.debug("GetGetter on_start complete")

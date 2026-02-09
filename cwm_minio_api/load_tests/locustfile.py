@@ -16,10 +16,12 @@ from cwm_minio_api.load_tests.shared_state import SharedState
 
 @events.test_start.add_listener
 def on_test_start(environment, **kwargs):
+    #logging.info("on_test_start")
     shared_state = SharedState.get_singleton()
-    if isinstance(environment.runner, (MasterRunner,LocalRunner)) and not config.CWM_INIT_FROM_REDIS:
+    if isinstance(environment.runner, (MasterRunner,LocalRunner)) and not (config.CWM_INIT_FROM_JSON_FILE or config.CWM_INIT_FROM_REDIS):
         shared_state.clear()
     environment.num_updowndel_onstart_completed = 0
+    #logging.info("on_test_start complete")
 
 
 def independent_client_request_retry(method, path, params, auth, **kwargs):
@@ -31,6 +33,7 @@ def independent_client_request_retry(method, path, params, auth, **kwargs):
 
 @events.test_stop.add_listener
 def on_stop(environment, **kwargs):
+    logging.info("on_stop")
     if isinstance(environment.runner, (MasterRunner, LocalRunner)):
         shared_state = SharedState.get_singleton()
         updowndel_started = shared_state.counter_get('updowndel_started')
@@ -47,6 +50,7 @@ def on_stop(environment, **kwargs):
             logging.info('shared state cleared.')
         if hasattr(environment, 'cwm_load_test_shape_state'):
             delattr(environment, 'cwm_load_test_shape_state')
+    logging.info("on_stop complete")
 
 
 class CwmLoadTestShape(LoadTestShape):
@@ -57,15 +61,10 @@ class CwmLoadTestShape(LoadTestShape):
             self.runner.environment.cwm_load_test_shape_state = {
                 'updowndel_separate_initialized': False,
                 'updowndel_separate_scaled_down': False,
-                'num_users': None,
-                'spawn_rate': None,
             }
         state = self.runner.environment.cwm_load_test_shape_state
         shared_state = SharedState.get_singleton()
-        if state['num_users'] is None or state['spawn_rate'] is None:
-            state['num_users'] = self.runner.environment.parsed_options.users
-            state['spawn_rate'] = self.runner.environment.parsed_options.spawn_rate
-        num_users, spawn_rate = state['num_users'], state['spawn_rate']
+        num_users, spawn_rate = self.runner.environment.parsed_options.users, self.runner.environment.parsed_options.spawn_rate
         user_classes = set()
         if config.CWM_GETGETTER_ENABLED:
             user_classes.add(GetGetter)
