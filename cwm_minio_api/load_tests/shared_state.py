@@ -1,6 +1,7 @@
 import json
 import random
 import time
+import logging
 
 from redis import Redis
 
@@ -24,12 +25,12 @@ class SharedState:
         self.last_redis_update_ts = None
         self.updating_from_redis = False
         if config.CWM_INIT_FROM_REDIS:
-            print('Initializing shared state from Redis...')
+            logging.info('Initializing shared state from Redis...')
             self.update_from_redis()
 
     def debug(self, *args, **kwargs):
         if self.debug_enabled:
-            print(*args, **kwargs)
+            logging.info(*args, **kwargs)
 
     def clear(self):
         self.debug('Clearing shared state in Redis...')
