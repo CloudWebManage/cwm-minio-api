@@ -8,6 +8,12 @@ from . import config
 
 
 class SharedState:
+    @classmethod
+    def get_instance(cls):
+        if not hasattr(cls, '_instance'):
+            cls._instance = cls()
+        return cls._instance
+
     def __init__(self):
         self.redis = Redis(config.SHARED_STATE_REDIS_HOST, config.SHARED_STATE_REDIS_PORT)
         self.debug_enabled = config.CWM_LOAD_TESTS_DEBUG

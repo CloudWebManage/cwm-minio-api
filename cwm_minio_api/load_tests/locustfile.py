@@ -10,14 +10,15 @@ from locust.runners import MasterRunner, LocalRunner
 from cwm_minio_api.load_tests.users.getgetter import GetGetter
 from cwm_minio_api.load_tests.users.updowndel import UpDownDel
 from cwm_minio_api.load_tests.users.base import teardown_instance
-from cwm_minio_api.load_tests import config, shared_state
+from cwm_minio_api.load_tests import config
+from cwm_minio_api.load_tests.shared_state import SharedState
 
 
 @events.test_start.add_listener
 def on_test_start(environment, **kwargs):
-    environment.shared_state = shared_state.SharedState()
+    shared_state = SharedState.get_instance()
     if isinstance(environment.runner, (MasterRunner,LocalRunner)) and not config.CWM_INIT_FROM_REDIS:
-        environment.shared_state.clear()
+        shared_state.clear()
     environment.num_updowndel_onstart_completed = 0
 
 
@@ -31,17 +32,18 @@ def independent_client_request_retry(method, path, params, auth, **kwargs):
 @events.test_stop.add_listener
 def on_stop(environment, **kwargs):
     if isinstance(environment.runner, (MasterRunner, LocalRunner)):
-        updowndel_started = environment.shared_state.counter_get('updowndel_started')
+        shared_state = SharedState.get_instance()
+        updowndel_started = shared_state.counter_get('updowndel_started')
         logging.info(f'master waiting for {updowndel_started} users to stop...')
-        while updowndel_started > environment.shared_state.counter_get('updowndel_stopped'):
+        while updowndel_started > shared_state.counter_get('updowndel_stopped'):
             sleep(1)
         logging.info('all users stopped, starting teardown...')
-        instance_ids = environment.shared_state.get_instance_ids(ttl_seconds=0)
+        instance_ids = shared_state.get_instance_ids(ttl_seconds=0)
         for instance_id in instance_ids:
-            teardown_instance(environment.shared_state, instance_id, independent_client_request_retry)
+            teardown_instance(shared_state, instance_id, independent_client_request_retry)
         logging.info(f'test teardown complete, {len(instance_ids)} instances deleted.')
         if not config.CWM_KEEP_REDIS_DATA:
-            environment.shared_state.clear()
+            shared_state.clear()
             logging.info('shared state cleared.')
         if hasattr(environment, 'cwm_load_test_shape_state'):
             delattr(environment, 'cwm_load_test_shape_state')
@@ -59,6 +61,7 @@ class CwmLoadTestShape(LoadTestShape):
                 'spawn_rate': None,
             }
         state = self.runner.environment.cwm_load_test_shape_state
+        shared_state = SharedState.get_instance()
         if state['num_users'] is None or state['spawn_rate'] is None:
             state['num_users'] = self.runner.environment.parsed_options.users
             state['spawn_rate'] = self.runner.environment.parsed_options.spawn_rate
@@ -71,7 +74,7 @@ class CwmLoadTestShape(LoadTestShape):
         if config.CWM_UPDOWNDEL_SEPARATE_FROM_OTHER_USERS:
             if not state['updowndel_separate_initialized']:
                 assert UpDownDel in user_classes and len(user_classes) > 1 and UpDownDel.fixed_count > 0
-                if not hasattr(self.runner.environment, 'shared_state') or self.runner.environment.shared_state.counter_get('updowndel_started') < UpDownDel.fixed_count:
+                if shared_state.counter_get('updowndel_started') < UpDownDel.fixed_count:
                     # Initial spawn of fixed UpDownDel users
                     return UpDownDel.fixed_count, spawn_rate, user_classes
                 else:

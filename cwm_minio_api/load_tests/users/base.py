@@ -11,6 +11,7 @@ from botocore.auth import SigV4Auth
 from botocore.credentials import Credentials
 
 from .. import config
+from ..shared_state import SharedState
 
 
 def generate_instance_id():
@@ -90,7 +91,7 @@ class BaseUser(FastHttpUser):
         super().__init__(environment)
         assert config.CWM_MINIO_API_USERNAME and config.CWM_MINIO_API_PASSWORD
         self.debug_enabled = config.CWM_LOAD_TESTS_DEBUG
-        self.shared_state = environment.shared_state
+        self.shared_state = SharedState.get_instance()
         self.instance_id = None
         self.instance_access_key = None
         self.instance_secret_key = None
