@@ -4,7 +4,9 @@ import dotenv
 import orjson
 
 
-dotenv.load_dotenv()
+_dotenvpath = os.path.join(os.path.dirname(__file__), '..', '.env')
+if os.path.exists(_dotenvpath):
+    dotenv.load_dotenv(_dotenvpath)
 
 
 CWM_LOG_LEVEL = os.getenv("CWM_LOG_LEVEL", "DEBUG")

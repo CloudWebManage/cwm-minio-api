@@ -70,7 +70,7 @@ class CwmLoadTestShape(LoadTestShape):
             user_classes.add(GetGetter)
         if config.CWM_UPDOWNDEL_ENABLED:
             user_classes.add(UpDownDel)
-        if config.CWM_UPDOWNDEL_SEPARATE_FROM_OTHER_USERS:
+        if config.CWM_UPDOWNDEL_ENABLED and config.CWM_UPDOWNDEL_SEPARATE_FROM_OTHER_USERS:
             if not state['updowndel_separate_initialized']:
                 assert UpDownDel in user_classes and len(user_classes) > 1 and UpDownDel.fixed_count > 0
                 if shared_state.counter_get('updowndel_started') < UpDownDel.fixed_count:

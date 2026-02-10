@@ -4,6 +4,7 @@ import time
 import logging
 
 from redis import Redis
+import requests
 
 from . import config
 
@@ -16,7 +17,7 @@ class SharedState:
         return cls._singleton
 
     def __init__(self):
-        self.redis = Redis(config.SHARED_STATE_REDIS_HOST, config.SHARED_STATE_REDIS_PORT)
+        self._redis = None
         self.debug_enabled = config.CWM_LOAD_TESTS_DEBUG
         self.key_prefix = 'cwm-minio-api:load-tests'
         self.instances = {}
@@ -25,6 +26,20 @@ class SharedState:
         self.last_redis_update_ts = None
         self.updating_from_redis = False
         self.disable_update_from_redis = False
+        self.tenant_info = None
+
+    @property
+    def redis(self):
+        if not self._redis:
+            self._redis = Redis(config.SHARED_STATE_REDIS_HOST, config.SHARED_STATE_REDIS_PORT)
+        return self._redis
+
+    def get_tenant_info(self):
+        if config.CWM_INIT_FROM_JSON_FILE:
+            self.update_from_redis()
+            return self.tenant_info
+        else:
+            return None
 
     def export(self, filename):
         self.last_redis_update_ts = None
@@ -37,6 +52,7 @@ class SharedState:
                 'instances': self.instances,
                 'instance_buckets': self.instance_buckets,
                 'instance_bucket_files': self.instance_bucket_files,
+                'tenant_info': requests.get(f'https://{config.CWM_MINIO_API_HOST}/tenant/info', auth=(config.CWM_MINIO_API_USERNAME, config.CWM_MINIO_API_PASSWORD),).json()
             }, f)
 
     def debug(self, *args, **kwargs):
@@ -69,6 +85,7 @@ class SharedState:
             self.instances = data.get('instances', {})
             self.instance_buckets = data.get('instance_buckets', {})
             self.instance_bucket_files = data.get('instance_bucket_files', {})
+            self.tenant_info = data.get('tenant_info')
 
     def update_from_redis(self):
         if not self.disable_update_from_redis:

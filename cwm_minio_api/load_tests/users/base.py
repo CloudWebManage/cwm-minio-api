@@ -147,11 +147,14 @@ class BaseUser(FastHttpUser):
         return bucket_name
 
     def update_tenant_info(self):
-        self.tenant_info.update(**self.client.get(
-            f'/tenant/info',
-            auth=(config.CWM_MINIO_API_USERNAME, config.CWM_MINIO_API_PASSWORD),
-            name='get_tenant_info',
-        ).json())
+        tenant_info = self.shared_state.get_tenant_info()
+        if not tenant_info:
+            tenant_info = self.client.get(
+                f'/tenant/info',
+                auth=(config.CWM_MINIO_API_USERNAME, config.CWM_MINIO_API_PASSWORD),
+                name='get_tenant_info',
+            ).json()
+        self.tenant_info.update(**tenant_info)
 
     def on_start(self):
         self.update_tenant_info()
