@@ -103,9 +103,10 @@ class SharedState:
                     for line in subprocess.check_output([
                         MINIO_MC_BINARY, "ls", f'{MINIO_MC_PROFILE}/{bucket_name}/', '--json', '--no-color'
                     ]).splitlines():
-                        num_files += 1
                         line = json.loads(line)
-                        self.add_file(instance_id, bucket_name, line['key'], line['size'])
+                        if int(line['size']) in config.CWM_UPDOWNDEL_CONTENT_LENGTH_VALUES:
+                            num_files += 1
+                            self.add_file(instance_id, bucket_name, line['key'], line['size'])
         self.debug(f'Initialization from JSON file complete, added {num_instances} instances, {num_buckets} buckets and {num_files} files to shared state.')
 
     def update_from_file(self, filename):
