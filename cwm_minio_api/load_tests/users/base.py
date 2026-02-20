@@ -3,6 +3,7 @@ import hashlib
 import traceback
 import json
 import logging
+import random
 
 import gevent
 from locust import FastHttpUser
@@ -167,32 +168,32 @@ class BaseUser(FastHttpUser):
             instance_id, access, secret = (self.instance_id, self.instance_access_key, self.instance_secret_key)
         log_suffix = 'public' if is_public else 'private'
         content_length = self.shared_state.get_filename_content_length(instance_id, bucket_name, filename)
-        if use_bucket_url:
-            base_url = self.get_minio_bucket_api_url(bucket_name)
-            log_suffix += ',bucket_url'
+        if instance_id == 'aws':
+            name_prefix = 'aws_'
+            region_name = config.AWS_REGION
+            base_url = f'https://s3.{region_name}.amazonaws.com/{bucket_name}'
         else:
-            base_url = f'{self.minio_api_url}/{bucket_name}'
+            name_prefix = ''
+            region_name = "us-east-1"
+            if use_bucket_url:
+                base_url = self.get_minio_bucket_api_url(bucket_name)
+                log_suffix += ',bucket_url'
+            else:
+                base_url = f'{self.minio_api_url}/{bucket_name}'
         url = f'{base_url}/{filename}'
         headers = {}
         if not is_public:
             payload_hash = hashlib.sha256(b"").hexdigest()
             request = AWSRequest(method="GET", url=url, headers={"x-amz-content-sha256": payload_hash})
-            SigV4Auth(Credentials(access, secret), "s3", "us-east-1").add_auth(request)
+            SigV4Auth(Credentials(access, secret), "s3", region_name).add_auth(request)
             headers=dict(request.headers)
-
-        def should_retry(res):
-            if res.status_code == 404:
-                if self.shared_state.is_filename_exists(instance_id, bucket_name, filename):
-                    return True, f'file not found'
-            return False, None
 
         self.client_request_retry(
             'get',
             url,
             headers=headers,
-            should_retry=should_retry,
             pre_return_hook=download_from_bucket_filename_pre_return_hook,
-            name=f'download_from_bucket({log_suffix},{content_length})',
+            name=f'{name_prefix}download_from_bucket({log_suffix},{content_length})',
             stream=stream,
         )
 
@@ -231,3 +232,13 @@ class BaseUser(FastHttpUser):
                     else:
                         return res.status_code, res.text
         raise Exception(f'client_request_retry exceeded max attempts {max_attempts}: {last_error_msg}')
+
+    def get_instance(self):
+        all_instance_ids = self.shared_state.get_instance_ids()
+        if len(all_instance_ids) > 0:
+            instance_id = random.choice(all_instance_ids)
+            instance = self.shared_state.get_instance(instance_id)
+            if instance:
+                access, secret = instance
+                return instance_id, access, secret
+        return None, None, None

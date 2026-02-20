@@ -14,10 +14,6 @@ class GetGetter(BaseUser):
 
     concurrency = config.CWM_GETGETTER_CONCURRENCY
 
-    def __init__(self, environment):
-        super().__init__(environment)
-        self.num_all_instances = 0
-
     @task
     def get(self):
         instance_id, access, secret = self.get_instance()
@@ -34,16 +30,6 @@ class GetGetter(BaseUser):
                         bucket_name, filename, is_public, use_bucket_url, instance=(instance_id, access, secret),
                         stream=True
                     )
-
-    def get_instance(self):
-        all_instance_ids = self.shared_state.get_instance_ids()
-        if len(all_instance_ids) > 0:
-            instance_id = random.choice(all_instance_ids)
-            instance = self.shared_state.get_instance(instance_id)
-            if instance:
-                access, secret = instance
-                return instance_id, access, secret
-        return None, None, None
 
     def on_start(self):
         self.debug("GetGetter on_start")

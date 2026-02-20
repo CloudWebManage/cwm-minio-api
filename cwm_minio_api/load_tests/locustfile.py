@@ -16,12 +16,15 @@ from cwm_minio_api.load_tests.shared_state import SharedState
 
 @events.test_start.add_listener
 def on_test_start(environment, **kwargs):
-    #logging.info("on_test_start")
+    # logging.info("on_test_start")
     shared_state = SharedState.get_singleton()
-    if isinstance(environment.runner, (MasterRunner,LocalRunner)) and not (config.CWM_INIT_FROM_JSON_FILE or config.CWM_INIT_FROM_REDIS):
-        shared_state.clear()
+    if isinstance(environment.runner, (MasterRunner,LocalRunner)):
+        if not config.CWM_INIT_FROM_JSON_FILE and not config.CWM_INIT_FROM_REDIS:
+            shared_state.clear()
+        elif config.CWM_INIT_FROM_JSON_FILE_ONLY_INSTANCE_BUCKETS:
+            shared_state.init_from_json_file_only_instance_buckets()
     environment.num_updowndel_onstart_completed = 0
-    #logging.info("on_test_start complete")
+    # logging.info("on_test_start complete")
 
 
 def independent_client_request_retry(method, path, params, auth, **kwargs):

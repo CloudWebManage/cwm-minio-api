@@ -2,11 +2,13 @@ import json
 import random
 import time
 import logging
+import subprocess
 
 from redis import Redis
 import requests
 
 from . import config
+from ..config import MINIO_MC_PROFILE, MINIO_MC_BINARY
 
 
 class SharedState:
@@ -27,6 +29,9 @@ class SharedState:
         self.updating_from_redis = False
         self.disable_update_from_redis = False
         self.tenant_info = None
+        self.init_from_json_file = None
+        if config.CWM_INIT_FROM_JSON_FILE and not config.CWM_INIT_FROM_JSON_FILE_ONLY_INSTANCE_BUCKETS:
+            self.init_from_json_file = config.CWM_INIT_FROM_JSON_FILE
 
     @property
     def redis(self):
@@ -35,7 +40,7 @@ class SharedState:
         return self._redis
 
     def get_tenant_info(self):
-        if config.CWM_INIT_FROM_JSON_FILE:
+        if self.init_from_json_file:
             self.update_from_redis()
             return self.tenant_info
         else:
@@ -79,6 +84,30 @@ class SharedState:
             now = self.get_timestamp()
         return int(now) - int(past_timestamp)
 
+    # this method runs once from the master locustfile and initializes this mode of operation
+    def init_from_json_file_only_instance_buckets(self):
+        self.debug('Initializing shared state from JSON file (only instances and buckets, files will be updated from MinIO)...')
+        self.redis.flushdb()
+        self.update_from_file(config.CWM_INIT_FROM_JSON_FILE)
+        self.instance_bucket_files = {}
+        num_instances = 0
+        num_buckets = 0
+        num_files = 0
+        for instance_id, instance in self.instances.items():
+            num_instances += 1
+            self.add_instance(instance_id, *instance)
+            for suffix, buckets in self.instance_buckets.get(instance_id, {}).items():
+                for bucket_name, bucket in buckets.items():
+                    num_buckets += 1
+                    self.upsert_bucket(instance_id, bucket_name, bucket)
+                    for line in subprocess.check_output([
+                        MINIO_MC_BINARY, "ls", f'{MINIO_MC_PROFILE}/{bucket_name}/', '--json', '--no-color'
+                    ]).splitlines():
+                        num_files += 1
+                        line = json.loads(line)
+                        self.add_file(instance_id, bucket_name, line['key'], line['size'])
+        self.debug(f'Initialization from JSON file complete, added {num_instances} instances, {num_buckets} buckets and {num_files} files to shared state.')
+
     def update_from_file(self, filename):
         with open(filename, 'r') as f:
             data = json.load(f)
@@ -92,10 +121,10 @@ class SharedState:
             if config.CWM_INIT_FROM_REDIS:
                 self.disable_update_from_redis = True
                 should_update = True
-            elif config.CWM_INIT_FROM_JSON_FILE:
+            elif self.init_from_json_file:
                 should_update = False
                 self.disable_update_from_redis = True
-                self.update_from_file(config.CWM_INIT_FROM_JSON_FILE)
+                self.update_from_file(self.init_from_json_file)
             else:
                 ttl_seconds = 5 if len(self.instances) < 1 else random.randint(240,360)
                 should_update = not self.updating_from_redis and (self.last_redis_update_ts is None or self.seconds_since(self.last_redis_update_ts) > ttl_seconds)
@@ -133,8 +162,8 @@ class SharedState:
                 finally:
                     self.updating_from_redis = False
 
-    def add_instance(self, instance_id, instance_access_key, instance_secret_key):
-        now = self.get_timestamp()
+    def add_instance(self, instance_id, instance_access_key, instance_secret_key, now=None):
+        now = now or self.get_timestamp()
         self.redis.set(f'{self.key_prefix}:instances:{instance_id}', f'{instance_access_key}:{instance_secret_key}:{now}')
         self.redis.sadd(f'{self.key_prefix}:instances', instance_id)
         self.instances[instance_id] = instance_access_key, instance_secret_key, now
@@ -149,7 +178,7 @@ class SharedState:
         key = f'{self.key_prefix}:instances:{instance_id}:buckets:'
         key_suffix = 'public' if bucket["public"] else 'private'
         key += key_suffix
-        bucket['__ts'] = self.get_timestamp()
+        bucket['__ts'] = bucket.get('__ts') or self.get_timestamp()
         self.redis.set(f'{key}:{bucket_name}', json.dumps(bucket))
         self.redis.sadd(key, bucket_name)
         self.instance_buckets.setdefault(instance_id, {}).setdefault(key_suffix, {})[bucket_name] = bucket
