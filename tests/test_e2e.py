@@ -113,7 +113,7 @@ async def test():
         exit_stack.push_async_callback(cwm_minio_api, 'buckets/credentials', method='delete', params=dict(instance_id=instance_id, bucket_name=bucket_name, access_key=creds_access_key))
         readme_content = await async_subprocess_check_output(MINIO_MC_BINARY, 'cat', f'cwme2etestcreds/{bucket_name}/README.md')
         assert len(readme_content) > 10
-        with pytest.raises(Exception, match="Command minio-mc cp README.md cwme2etestcreds/cwm-e2e-test-bucket/README4.md failed, check logs for details"):
+        with pytest.raises(Exception, match=f"Command {MINIO_MC_BINARY} cp README.md cwme2etestcreds/cwm-e2e-test-bucket/README4.md failed, check logs for details"):
             await async_subprocess_check_call(MINIO_MC_BINARY, 'cp', 'README.md', f'cwme2etestcreds/{bucket_name}/README4.md')
         await cwm_minio_api('buckets/update', method='put', json=dict(instance_id=instance_id, bucket_name=bucket_name, public=False, blocked=True))
         status, _ = await async_subprocess_status_output(MINIO_MC_BINARY, 'ls', 'cwme2etest', '--json')
