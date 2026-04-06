@@ -67,12 +67,15 @@ async def test_crud(cwm_test_db):
     }
     assert set(tracker_get_calls()) == {
         ('mc_check_call', ('admin', 'policy', 'detach', 'cwm', f'{bucket_name}_read', '--user', created_credentials['access_key'])),
+        ('mc_check_call', ('admin', 'policy', 'detach', 'cwm', f'{bucket_name}_write', '--user', created_credentials['access_key'])),
+        ('mc_check_call', ('admin', 'policy', 'detach', 'cwm', f'{bucket_name}_delete', '--user', created_credentials['access_key'])),
         ('mc_check_call', ('admin', 'policy', 'attach', 'cwm', f'{bucket_name}_write', '--user', created_credentials['access_key'])),
         ('mc_check_call', ('admin', 'policy', 'attach', 'cwm', f'{bucket_name}_delete', '--user', created_credentials['access_key'])),
     }
 
     await buckets_api.credentials_delete(instance_id, bucket_name, created_credentials['access_key'])
     assert set(tracker_get_calls()) == {
+        ('mc_check_call', ('admin', 'policy', 'detach', 'cwm', f'{bucket_name}_read', '--user', created_credentials['access_key'])),
         ('mc_check_call', ('admin', 'policy', 'detach', 'cwm', f'{bucket_name}_write', '--user', created_credentials['access_key'])),
         ('mc_check_call', ('admin', 'policy', 'detach', 'cwm', f'{bucket_name}_delete', '--user', created_credentials['access_key'])),
     }
