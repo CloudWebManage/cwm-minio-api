@@ -69,10 +69,16 @@ async def delete(instance_id):
         if instance is None:
             raise Exception('Instance not found')
         from ..buckets import api as buckets_api
+        from ..credentials import api as credentials_api
         bucket_names = [b async for b in buckets_api.list_iterator(instance_id, cur=cur)]
         await common.async_run_batches([
             buckets_api.delete(instance_id, bucket_name)
             for bucket_name in bucket_names
+        ])
+        credentials = [c async for c in credentials_api.list_iterator(instance_id, cur=cur)]
+        await common.async_run_batches([
+            credentials_api.delete(credential['access_key'])
+            for credential in credentials
         ])
         access_key = instance['access_key']
         if access_key:

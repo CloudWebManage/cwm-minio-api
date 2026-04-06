@@ -80,17 +80,23 @@ async def get(instance_id: str, bucket_name: str, with_size: bool = False):
         return bucket
 
 
-class CredentialsCreateRequest(BaseModel):
+class CredentialsRequest(BaseModel):
     instance_id: str
     bucket_name: str
+    access_key: str
     read: bool
     write: bool
     delete: bool
 
 
 @router.post('/buckets/credentials', tags=['buckets'])
-async def credentials_create(request: CredentialsCreateRequest):
-    return common.cli_print_json(await api.credentials_create(request.instance_id, request.bucket_name, request.read, request.write, request.delete))
+async def credentials_create(request: CredentialsRequest):
+    return common.cli_print_json(await api.credentials_create(request.instance_id, request.bucket_name, request.access_key, request.read, request.write, request.delete))
+
+
+@router.put('/buckets/credentials', tags=['buckets'])
+async def credentials_update(request: CredentialsRequest):
+    return common.cli_print_json(await api.credentials_update(request.instance_id, request.bucket_name, request.access_key, request.read, request.write, request.delete))
 
 
 @main.command()

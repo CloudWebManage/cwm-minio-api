@@ -2,6 +2,7 @@ import pytest
 
 from cwm_minio_api.instances import api as instances_api
 from cwm_minio_api.buckets import api as buckets_api
+from cwm_minio_api.credentials import api as credentials_api
 from cwm_minio_api import db
 
 
@@ -32,7 +33,9 @@ async def test_crud(cwm_test_db):
         'blocked': False,
         'num_buckets': 1
     }
-    bucket_access_key = (await buckets_api.credentials_create(instance_id, bucket_name, read=True, write=True, delete=True))['access_key']
+    bucket_credentials = await credentials_api.create(instance_id)
+    bucket_access_key = bucket_credentials['access_key']
+    await buckets_api.credentials_create(instance_id, bucket_name, bucket_access_key, read=True, write=True, delete=True)
     assert [c['access_key'] async for c in buckets_api.credentials_list_iterator(instance_id, bucket_name)] == [bucket_access_key]
     await instances_api.delete(instance_id)
     assert [i async for i in instances_api.list_iterator()] == []
@@ -85,19 +88,28 @@ async def test_instance_lock_unlock(cwm_test_db):
         ("mc_check_call", ('admin', 'policy', 'attach', 'cwm', f'{public_bucket_name}_write', '--user', access_key)),
         ("mc_check_call", ('admin', 'policy', 'attach', 'cwm', f'{public_bucket_name}_delete', '--user', access_key)),
     ]
-    private_read_creds = await buckets_api.credentials_create(instance_id, private_bucket_name, read=True, write=False, delete=False)
+    private_read_creds = await credentials_api.create(instance_id)
     assert tw() == [
         ("mc_check_call", ('admin', 'user', 'add', 'cwm', private_read_creds['access_key'], private_read_creds['secret_key'])),
+    ]
+    await buckets_api.credentials_create(instance_id, private_bucket_name, private_read_creds['access_key'], read=True, write=False, delete=False)
+    assert tw() == [
         ("mc_check_call", ('admin', 'policy', 'attach', 'cwm', f'{private_bucket_name}_read', '--user', private_read_creds['access_key'])),
     ]
-    private_write_creds = await buckets_api.credentials_create(instance_id, private_bucket_name, read=False, write=True, delete=False)
+    private_write_creds = await credentials_api.create(instance_id)
     assert tw() == [
         ("mc_check_call", ('admin', 'user', 'add', 'cwm', private_write_creds['access_key'], private_write_creds['secret_key'])),
+    ]
+    await buckets_api.credentials_create(instance_id, private_bucket_name, private_write_creds['access_key'], read=False, write=True, delete=False)
+    assert tw() == [
         ("mc_check_call", ('admin', 'policy', 'attach', 'cwm', f'{private_bucket_name}_write', '--user', private_write_creds['access_key'])),
     ]
-    public_write_creds = await buckets_api.credentials_create(instance_id, public_bucket_name, read=False, write=True, delete=False)
+    public_write_creds = await credentials_api.create(instance_id)
     assert tw() == [
         ("mc_check_call", ('admin', 'user', 'add', 'cwm', public_write_creds['access_key'], public_write_creds['secret_key'])),
+    ]
+    await buckets_api.credentials_create(instance_id, public_bucket_name, public_write_creds['access_key'], read=False, write=True, delete=False)
+    assert tw() == [
         ("mc_check_call", ('admin', 'policy', 'attach', 'cwm', f'{public_bucket_name}_write', '--user', public_write_creds['access_key'])),
     ]
     assert {c['access_key']: c async for c in buckets_api.credentials_list_iterator(instance_id, private_bucket_name)} == {
@@ -142,14 +154,8 @@ async def test_instance_lock_unlock(cwm_test_db):
 
         ## Detach credentials ##
         ("mc_check_call", ('admin', 'policy', 'detach', 'cwm', f'{private_bucket_name}_read', '--user', private_read_creds['access_key'])),
-        ("mc_check_call", ('admin', 'policy', 'detach', 'cwm', f'{private_bucket_name}_write', '--user', private_read_creds['access_key'])),
-        ("mc_check_call", ('admin', 'policy', 'detach', 'cwm', f'{private_bucket_name}_delete', '--user', private_read_creds['access_key'])),
-        ("mc_check_call", ('admin', 'policy', 'detach', 'cwm', f'{private_bucket_name}_read', '--user', private_write_creds['access_key'])),
         ("mc_check_call", ('admin', 'policy', 'detach', 'cwm', f'{private_bucket_name}_write', '--user', private_write_creds['access_key'])),
-        ("mc_check_call", ('admin', 'policy', 'detach', 'cwm', f'{private_bucket_name}_delete', '--user', private_write_creds['access_key'])),
-        ("mc_check_call", ('admin', 'policy', 'detach', 'cwm', f'{public_bucket_name}_read', '--user', public_write_creds['access_key'])),
         ("mc_check_call", ('admin', 'policy', 'detach', 'cwm', f'{public_bucket_name}_write', '--user', public_write_creds['access_key'])),
-        ("mc_check_call", ('admin', 'policy', 'detach', 'cwm', f'{public_bucket_name}_delete', '--user', public_write_creds['access_key'])),
     }
     await instances_api.update(instance_id, blocked=False)
     assert set(tw()) == {

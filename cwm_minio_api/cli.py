@@ -21,6 +21,7 @@ async def main():
 
 for submodule in [
     'buckets',
+    'credentials',
     'instances',
 ]:
     main.add_command(getattr(importlib.import_module(f'.{submodule}.router', __package__), 'main'), name=submodule.replace('_', '-'))

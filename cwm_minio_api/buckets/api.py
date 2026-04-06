@@ -2,7 +2,8 @@ import traceback
 from textwrap import dedent
 from contextlib import AsyncExitStack
 
-from .. import db, common, access_keys
+from .. import db, common
+from ..credentials import api as credentials_api
 from ..instances.api import get as get_instance
 from ..minio import api as minio_api
 
@@ -152,7 +153,7 @@ async def update(instance_id, bucket_name, public, blocked):
                 await update_instance_access_key(bucket_name, None, instance['access_key'])
                 credentials = [c async for c in credentials_list_iterator(instance_id, bucket_name, cur=cur)]
                 await common.async_run_batches([
-                    credentials_attach(bucket_name, c['access_key'], c['permission_read'], c['permission_write'], c['permission_delete'])
+                    credentials_attach(bucket_name, c['access_key'], c['permission_read'], c['permission_write'], c['permission_delete'], exit_stack=stack)
                     for c in credentials
                 ])
             await conn.commit()
@@ -190,12 +191,21 @@ async def delete(instance_id, bucket_name):
         bucket = await get(instance_id, bucket_name, cur=cur)
         if bucket is None:
             raise Exception('Bucket not found')
+        credentials = [c async for c in credentials_list_iterator(instance_id, bucket_name, cur=cur)]
         async with AsyncExitStack() as stack:
+            await cur.execute('''
+                DELETE FROM bucket_credentials
+                WHERE instance_id = %s AND bucket_name = %s
+            ''', (instance_id, bucket_name))
             await cur.execute('''
                 DELETE FROM buckets
                 WHERE instance_id = %s AND name = %s
             ''', (instance_id, bucket_name))
             await update_instance_access_key(bucket_name, instance['access_key'], None)
+            await common.async_run_batches([
+                credentials_detach(bucket_name, c['access_key'], exit_stack=stack)
+                for c in credentials
+            ])
             await common.async_run_batches([
                 minio_api.delete_policy(policy)
                 for policy in [
@@ -274,7 +284,7 @@ async def list_buckets_prometheus_sd(targets):
         return buckets
 
 
-async def credentials_attach(bucket_name, access_key, permission_read, permission_write, permission_delete, exit_stack=None):
+def get_credential_policies(bucket_name, permission_read=True, permission_write=True, permission_delete=True):
     policies = []
     if permission_read:
         policies.append(f'{bucket_name}_read')
@@ -282,46 +292,80 @@ async def credentials_attach(bucket_name, access_key, permission_read, permissio
         policies.append(f'{bucket_name}_write')
     if permission_delete:
         policies.append(f'{bucket_name}_delete')
+    return policies
+
+
+async def credentials_attach(bucket_name, access_key, permission_read, permission_write, permission_delete, exit_stack=None):
+    policies = get_credential_policies(bucket_name, permission_read, permission_write, permission_delete)
     await common.async_run_batches([
         minio_api.attach_policy_to_user(policy, access_key, exit_stack=exit_stack)
         for policy in policies
     ])
 
 
-async def credentials_create(instance_id, bucket_name, read, write, delete):
+async def credentials_create(instance_id, bucket_name, access_key, read, write, delete):
     if not any([read, write, delete]):
         raise Exception('At least one permission must be specified')
-    bucket = await get(instance_id, bucket_name)
-    if bucket is None:
-        raise Exception('Bucket not found')
-    if bucket['blocked']:
-        raise Exception('Bucket is blocked')
     async with db.connection_cursor() as (conn, cur):
+        bucket = await get(instance_id, bucket_name, cur=cur)
+        if bucket is None:
+            raise Exception('Bucket not found')
+        if bucket['blocked']:
+            raise Exception('Bucket is blocked')
+        credential = await credentials_api.get(access_key, cur=cur)
+        if credential is None or credential['instance_id'] != instance_id:
+            raise Exception('Credentials not found')
+        if await credentials_get(instance_id, bucket_name, access_key, cur=cur) is not None:
+            raise Exception('Credentials already assigned')
         async with AsyncExitStack() as exit_stack:
-            access_key = await access_keys.get_access_key(exit_stack)
-            secret_key = common.generate_key(40)
             await cur.execute('''
                 INSERT INTO bucket_credentials (instance_id, bucket_name, access_key, permission_read, permission_write, permission_delete)
                 VALUES (%s, %s, %s, %s, %s, %s)
             ''', (instance_id, bucket_name, access_key, read, write, delete))
-            await minio_api.create_user(access_key, secret_key, exit_stack=exit_stack)
             await credentials_attach(bucket_name, access_key, read, write, delete, exit_stack=exit_stack)
             await conn.commit()
             exit_stack.pop_all()
-    return {
-        'access_key': access_key,
-        'secret_key': secret_key,
-    }
+    return await credentials_get(instance_id, bucket_name, access_key)
+
+
+async def credentials_update(instance_id, bucket_name, access_key, read, write, delete):
+    if not any([read, write, delete]):
+        raise Exception('At least one permission must be specified')
+    async with db.connection_cursor() as (conn, cur):
+        bucket = await get(instance_id, bucket_name, cur=cur)
+        if bucket is None:
+            raise Exception('Bucket not found')
+        if bucket['blocked']:
+            raise Exception('Bucket is blocked')
+        credential = await credentials_api.get(access_key, cur=cur)
+        if credential is None or credential['instance_id'] != instance_id:
+            raise Exception('Credentials not found')
+        existing_credential = await credentials_get(instance_id, bucket_name, access_key, cur=cur)
+        if existing_credential is None:
+            raise Exception('Credentials not found')
+        async with AsyncExitStack() as exit_stack:
+            await cur.execute('''
+                UPDATE bucket_credentials
+                SET permission_read = %s, permission_write = %s, permission_delete = %s
+                WHERE instance_id = %s AND bucket_name = %s AND access_key = %s
+            ''', (read, write, delete, instance_id, bucket_name, access_key))
+            await credentials_detach(
+                bucket_name,
+                access_key,
+                exit_stack=exit_stack,
+            )
+            await credentials_attach(bucket_name, access_key, read, write, delete, exit_stack=exit_stack)
+            await conn.commit()
+            exit_stack.pop_all()
+    return await credentials_get(instance_id, bucket_name, access_key)
 
 
 async def credentials_detach(bucket_name, access_key, exit_stack=None):
+    # minio detach policy does not fail if policy does not exist, so we just detach all policies regardless of which ones the access key actually has
+    policies = get_credential_policies(bucket_name)
     await common.async_run_batches([
         minio_api.detach_policy_from_user(policy, access_key, exit_stack=exit_stack)
-        for policy in [
-            f'{bucket_name}_read',
-            f'{bucket_name}_write',
-            f'{bucket_name}_delete',
-        ]
+        for policy in policies
     ])
 
 
@@ -330,21 +374,39 @@ async def credentials_delete(instance_id, bucket_name, access_key):
         bucket = await get(instance_id, bucket_name, cur=cur)
         if bucket is None:
             raise Exception('Bucket not found')
+        credential = await credentials_get(instance_id, bucket_name, access_key, cur=cur)
+        if credential is None:
+            raise Exception('Credentials not found')
         async with AsyncExitStack() as stack:
-            await cur.execute('''
-                SELECT 1 from bucket_credentials
-                WHERE instance_id = %s AND bucket_name = %s AND access_key = %s
-            ''', (instance_id, bucket_name, access_key))
-            if await cur.fetchone() is None:
-                raise Exception('Credentials not found')
             await cur.execute('''
                 DELETE FROM bucket_credentials
                 WHERE instance_id = %s AND bucket_name = %s AND access_key = %s
             ''', (instance_id, bucket_name, access_key))
-            await credentials_detach(bucket_name, access_key, exit_stack=stack)
-            await minio_api.delete_user(access_key)
+            await credentials_detach(
+                bucket_name,
+                access_key,
+                exit_stack=stack
+            )
             await conn.commit()
             stack.pop_all()
+
+
+async def credentials_get(instance_id, bucket_name, access_key, cur=None):
+    async with db.connection_cursor(cur) as (conn, cur):
+        await cur.execute('''
+            SELECT access_key, permission_read, permission_write, permission_delete
+            FROM bucket_credentials
+            WHERE instance_id = %s AND bucket_name = %s AND access_key = %s
+        ''', (instance_id, bucket_name, access_key))
+        row = await cur.fetchone()
+        if row is None:
+            return None
+        return {
+            'access_key': row['access_key'],
+            'permission_read': row['permission_read'],
+            'permission_write': row['permission_write'],
+            'permission_delete': row['permission_delete'],
+        }
 
 
 async def credentials_list_iterator(instance_id, bucket_name, cur=None):

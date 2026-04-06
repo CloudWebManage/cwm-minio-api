@@ -17,6 +17,7 @@ async def root():
 for submodule in [
     'instances',
     'buckets',
+    'credentials',
     'tenant',
     'metrics',
 ]:
