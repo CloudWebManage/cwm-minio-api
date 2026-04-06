@@ -7,12 +7,17 @@ import pytest
 
 from cwm_minio_api.common import async_subprocess_check_call
 from cwm_minio_api.config import MINIO_MC_BINARY
+from cwm_minio_api.buckets import api as buckets_api
 
 
 logging.basicConfig(
     level='DEBUG',
     handlers=[logging.StreamHandler(sys.stderr)]
 )
+
+
+def get_bucket_policy_arg(t, bucket_name):
+    return 'FILE::' + getattr(buckets_api, f'BUCKET_POLICY_{t.upper()}_TEMPLATE').replace("__BUCKET_NAME__", bucket_name)
 
 
 @pytest.fixture(scope='function')
@@ -37,7 +42,7 @@ async def cwm_test_db(monkeypatch, test_db):
     tracker = []
 
     state = {
-        "tracker": tracker
+        "tracker": tracker,
     }
 
     async def mc_check_call(*args):
@@ -89,6 +94,7 @@ async def cwm_test_db(monkeypatch, test_db):
 
     state['tracker_get_calls'] = tracker_get_calls
     state['tracker_assert_calls'] = tracker_assert_calls
+    state['get_bucket_policy_arg'] = get_bucket_policy_arg
     yield state
 
 
