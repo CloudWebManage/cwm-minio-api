@@ -33,7 +33,17 @@ async def mc_check_call(*args, return_output=False):
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
-        stdout, _ = await proc.communicate()
+        try:
+            stdout, _ = await asyncio.wait_for(
+                proc.communicate(),
+                timeout=config.MINIO_MC_TIMEOUT_SECONDS,
+            )
+        except TimeoutError:
+            proc.kill()
+            await proc.communicate()
+            raise TimeoutError(
+                f'mc command timed out after {config.MINIO_MC_TIMEOUT_SECONDS} seconds'
+            ) from None
         stdout = stdout.decode().strip()
         logging.debug(f'mc_check_call({" ".join(args)}): {stdout}')
         assert proc.returncode == 0, stdout
@@ -126,6 +136,53 @@ async def bucket_anonymous_set_none(bucket_name, exit_stack=None):
     if exit_stack:
         exit_stack.push_async_callback(bucket_anonymous_set_download, bucket_name)
     await mc_check_call('anonymous', 'set', 'none', f'{config.MINIO_MC_PROFILE}/{bucket_name}')
+
+
+async def set_bucket_versioning(bucket_name, enabled):
+    action = 'enable' if enabled else 'suspend'
+    await mc_check_call('version', action, f'{config.MINIO_MC_PROFILE}/{bucket_name}')
+
+
+async def add_bucket_lifecycle_rule(
+    bucket_name,
+    expire_delete_marker=True,
+    noncurrent_expire_days=None,
+    noncurrent_expire_newer=None,
+):
+    args = ['ilm', 'rule', 'add']
+    if expire_delete_marker:
+        args.append('--expire-delete-marker')
+    if noncurrent_expire_days is not None:
+        args.extend(('--noncurrent-expire-days', str(noncurrent_expire_days)))
+    if noncurrent_expire_newer is not None:
+        args.extend(('--noncurrent-expire-newer', str(noncurrent_expire_newer)))
+    args.extend((f'{config.MINIO_MC_PROFILE}/{bucket_name}', '--json'))
+    result = orjson.loads(await mc_check_output(*args))
+    rule_id = result.get('id')
+    if not rule_id:
+        raise Exception('MinIO did not return a lifecycle rule ID')
+    return rule_id
+
+
+async def remove_bucket_lifecycle_rule(bucket_name, rule_id):
+    try:
+        await mc_check_call(
+            'ilm', 'rule', 'remove', '--id', rule_id,
+            f'{config.MINIO_MC_PROFILE}/{bucket_name}', '--json',
+        )
+    except AssertionError as e:
+        message = str(e)
+        try:
+            error = orjson.loads(message)
+            message = error['error']['cause']['message']
+        except (orjson.JSONDecodeError, KeyError, TypeError):
+            pass
+        message = message.lower()
+        missing_rule = 'lifecycle rule for id' in message and 'not found' in message
+        missing_configuration = 'lifecycle configuration does not exist' in message
+        if not missing_rule and not missing_configuration:
+            raise
+        logging.warning('Managed lifecycle rule %s is already absent from bucket %s', rule_id, bucket_name)
 
 
 async def get_bucket_size(bucket_name):
