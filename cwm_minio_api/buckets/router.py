@@ -50,6 +50,18 @@ class VersioningRequest(BaseModel):
 
 @router.put('/buckets/versioning', tags=['buckets'])
 async def update_versioning(request: VersioningRequest):
+    """Bucket versioning management
+    By default buckets are created with versioning disabled.
+
+    When you enable versioning, you can also set the following, which correspond to minio mc ilm arguments:
+
+    * expire-delete-marker: default to true which directs minio to remove delete markers for objects with no remaining object versions.
+    * noncurrent-expire-days: The number of days to retain an object version after becoming non-current.
+    * noncurrent-expire-newer: The maximum number of non-current object versions to retain, ordered from newest to oldest.
+
+    There is also a global setting at the infra level for MINIO_API_OBJECT_MAX_VERSIONS - this is set to 1000
+    so in any case maximum version count per object is 1000, if exceeded it will raise an error when trying to update the object.
+    """
     return common.cli_print_json(await api.update_versioning(
         request.instance_id,
         request.bucket_name,
