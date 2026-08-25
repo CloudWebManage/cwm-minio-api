@@ -20,9 +20,12 @@ BUCKET_POLICY_READ_TEMPLATE = dedent('''
             "s3:ListAllMyBuckets",
             "s3:GetObject",
             "s3:GetObjectAttributes",
+            "s3:GetObjectVersion",
             "s3:GetObjectVersionAttributes",
             "s3:ListBucket",
-            "s3:GetObjectTagging"
+            "s3:ListBucketVersions",
+            "s3:GetObjectTagging",
+            "s3:GetObjectVersionTagging"
         ],
          "Resource": [
             "arn:aws:s3:::__BUCKET_NAME__",
@@ -42,6 +45,7 @@ BUCKET_POLICY_WRITE_TEMPLATE = dedent('''
             "s3:RestoreObject",
             "s3:PutObject",
             "s3:PutObjectTagging",
+            "s3:PutObjectVersionTagging",
             "s3:AbortMultipartUpload",
             "s3:ListMultipartUploadParts",
             "s3:ListBucketMultipartUploads"
@@ -62,7 +66,9 @@ BUCKET_POLICY_DELETE_TEMPLATE = dedent('''
          "Effect" : "Allow",
          "Action" : [
             "s3:DeleteObject",
-            "s3:DeleteObjectTagging"
+            "s3:DeleteObjectVersion",
+            "s3:DeleteObjectTagging",
+            "s3:DeleteObjectVersionTagging"
         ],
          "Resource": [
             "arn:aws:s3:::__BUCKET_NAME__",
