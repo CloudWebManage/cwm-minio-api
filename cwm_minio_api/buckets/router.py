@@ -1,6 +1,6 @@
 import asyncclick as click
 from fastapi import APIRouter
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 from . import api
 from .. import common
@@ -35,6 +35,29 @@ class UpdateRequest(BaseModel):
 @router.put('/buckets/update', tags=['buckets'])
 async def update(request: UpdateRequest):
     return common.cli_print_json(await api.update(request.instance_id, request.bucket_name, request.public, request.blocked))
+
+
+class VersioningRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    instance_id: str
+    bucket_name: str
+    enabled: bool = False
+    expire_delete_marker: bool = Field(default=True, alias='expire-delete-marker')
+    noncurrent_expire_days: int | None = Field(default=None, alias='noncurrent-expire-days', gt=0)
+    noncurrent_expire_newer: int | None = Field(default=None, alias='noncurrent-expire-newer', ge=0)
+
+
+@router.put('/buckets/versioning', tags=['buckets'])
+async def update_versioning(request: VersioningRequest):
+    return common.cli_print_json(await api.update_versioning(
+        request.instance_id,
+        request.bucket_name,
+        enabled=request.enabled,
+        expire_delete_marker=request.expire_delete_marker,
+        noncurrent_expire_days=request.noncurrent_expire_days,
+        noncurrent_expire_newer=request.noncurrent_expire_newer,
+    ))
 
 
 @main.command()

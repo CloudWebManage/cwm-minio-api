@@ -17,6 +17,7 @@ DB_CONNSTRING = os.getenv('DB_CONNSTRING', 'postgresql://postgres:123456@localho
 
 MINIO_MC_BINARY = os.getenv('MINIO_MC_BINARY', 'mc')
 MINIO_MC_PROFILE = os.getenv('MINIO_MC_PROFILE', 'cwm')
+MINIO_MC_TIMEOUT_SECONDS = float(os.getenv('MINIO_MC_TIMEOUT_SECONDS', '900'))
 
 TENANT_INFO = orjson.loads(os.getenv('TENANT_INFO_JSON', '{}'))
 

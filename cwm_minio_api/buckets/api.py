@@ -161,6 +161,64 @@ async def update(instance_id, bucket_name, public, blocked):
         return await get(instance_id, bucket_name, cur=cur)
 
 
+async def update_versioning(
+    instance_id,
+    bucket_name,
+    enabled=False,
+    expire_delete_marker=True,
+    noncurrent_expire_days=None,
+    noncurrent_expire_newer=None,
+):
+    async with db.connection_cursor() as (conn, cur):
+        instance = await get_instance(instance_id, cur=cur)
+        if instance is None:
+            raise Exception('Instance not found')
+        await cur.execute('''
+            SELECT versioning_enabled, versioning_ilm_rule_id
+            FROM buckets
+            WHERE name = %s AND instance_id = %s
+            FOR UPDATE
+        ''', (bucket_name, instance_id))
+        bucket = await cur.fetchone()
+        if bucket is None:
+            raise Exception('Bucket not found')
+
+        async with AsyncExitStack() as stack:
+            new_rule_id = None
+            if expire_delete_marker or noncurrent_expire_days is not None or noncurrent_expire_newer is not None:
+                new_rule_id = await minio_api.add_bucket_lifecycle_rule(
+                    bucket_name,
+                    expire_delete_marker=expire_delete_marker,
+                    noncurrent_expire_days=noncurrent_expire_days,
+                    noncurrent_expire_newer=noncurrent_expire_newer,
+                )
+                stack.push_async_callback(minio_api.remove_bucket_lifecycle_rule, bucket_name, new_rule_id)
+            stack.push_async_callback(
+                minio_api.set_bucket_versioning,
+                bucket_name,
+                bucket['versioning_enabled'],
+            )
+            await minio_api.set_bucket_versioning(bucket_name, enabled)
+            if bucket['versioning_ilm_rule_id']:
+                await minio_api.remove_bucket_lifecycle_rule(bucket_name, bucket['versioning_ilm_rule_id'])
+            await cur.execute('''
+                UPDATE buckets
+                SET versioning_enabled = %s, versioning_ilm_rule_id = %s
+                WHERE name = %s AND instance_id = %s
+            ''', (enabled, new_rule_id, bucket_name, instance_id))
+            await conn.commit()
+            stack.pop_all()
+
+    return {
+        'instance_id': instance_id,
+        'bucket_name': bucket_name,
+        'enabled': enabled,
+        'expire_delete_marker': expire_delete_marker,
+        'noncurrent_expire_days': noncurrent_expire_days,
+        'noncurrent_expire_newer': noncurrent_expire_newer,
+    }
+
+
 async def update_instance_access_key(bucket_name, old_access_key, new_access_key):
     policies = [
         f'{bucket_name}_read',

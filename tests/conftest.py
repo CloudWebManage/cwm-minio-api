@@ -23,12 +23,13 @@ def get_bucket_policy_arg(t, bucket_name):
 @pytest.fixture(scope='function')
 async def test_db(monkeypatch):
     db_name = f'cwm_test_{uuid1().hex}'
-    monkeypatch.setattr('cwm_minio_api.config.DB_CONNSTRING', f'postgresql://postgres:123456@localhost/{db_name}')
+    db_host = os.getenv('CWM_TEST_DB_HOST', 'localhost')
+    monkeypatch.setattr('cwm_minio_api.config.DB_CONNSTRING', f'postgresql://postgres:123456@{db_host}/{db_name}')
     await async_subprocess_check_call('docker', 'compose', 'exec', '--user', 'postgres', 'db', 'createdb', db_name)
     try:
         await async_subprocess_check_call('bin/migrate.sh', 'up', env={
             **os.environ,
-            'MIGRATE_DATABASE_URL': f'postgres://postgres:123456@localhost:5432/{db_name}?sslmode=disable'
+            'MIGRATE_DATABASE_URL': f'postgres://postgres:123456@{db_host}:5432/{db_name}?sslmode=disable'
         })
         yield
     finally:
@@ -101,7 +102,8 @@ async def cwm_test_db(monkeypatch, test_db):
 @pytest.fixture(scope='function')
 async def cwm_test_minio(monkeypatch, test_db):
     test_prefix = f'cwmtest-{uuid1().hex[:10]}'
+    minio_host = os.getenv('CWM_TEST_MINIO_HOST', 'localhost')
     monkeypatch.setattr('cwm_minio_api.config.MINIO_MC_PROFILE', 'cwmtest')
-    await async_subprocess_check_call(MINIO_MC_BINARY, 'alias', 'set', 'cwmtest', 'http://localhost:9000', 'cwm', '12345678')
+    await async_subprocess_check_call(MINIO_MC_BINARY, 'alias', 'set', 'cwmtest', f'http://{minio_host}:9000', 'cwm', '12345678')
     print(f'Using MinIO test prefix: {test_prefix}')
     yield 'cwmtest', test_prefix

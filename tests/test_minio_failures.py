@@ -2,10 +2,19 @@ import pytest
 
 from cwm_minio_api.instances import api as instances_api
 from cwm_minio_api.buckets import api as buckets_api
+from cwm_minio_api.minio import api as minio_api
 
 
 class MinioFailureException(Exception):
     pass
+
+
+async def test_mc_call_timeout(monkeypatch):
+    monkeypatch.setattr('cwm_minio_api.config.MINIO_MC_BINARY', 'bash')
+    monkeypatch.setattr('cwm_minio_api.config.MINIO_MC_TIMEOUT_SECONDS', 0.01, raising=False)
+
+    with pytest.raises(TimeoutError, match='mc command timed out after 0.01 seconds'):
+        await minio_api.mc_check_call('-c', 'sleep 1')
 
 
 @pytest.mark.parametrize('rollback_failure', (
