@@ -192,8 +192,9 @@ async def test_versioned_bucket_operations():
         ))
         assert len(versions) == 2
         assert all(version['key'] == object_name for version in versions)
-        latest = next(version for version in versions if version['isLatest'])
-        previous = next(version for version in versions if not version['isLatest'])
+        latest, previous = sorted(
+            versions, key=lambda version: version['versionOrdinal'], reverse=True,
+        )
 
         assert await async_subprocess_check_output(MINIO_MC_BINARY, 'cat', target) == 'version two'
         assert await async_subprocess_check_output(
