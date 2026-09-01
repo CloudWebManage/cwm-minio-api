@@ -70,6 +70,13 @@ async def test_instance_lock_unlock(cwm_test_db):
     await buckets_api.create(instance_id, private_bucket_name, public=False)
     assert tw() == [
         ("mc_check_call", ('mb', f'cwm/{private_bucket_name}')),
+        ("mc_check_call", (
+            'ilm', 'rule', 'add',
+            '--tags', 'cwm-tier=low',
+            '--transition-days', '1',
+            '--transition-tier', 'LOW',
+            f'cwm/{private_bucket_name}',
+        )),
         ("mc_check_call", ('admin', 'policy', 'create', 'cwm', f'{private_bucket_name}_read', bucket_policy_arg('read', private_bucket_name))),
         ("mc_check_call", ('admin', 'policy', 'create', 'cwm', f'{private_bucket_name}_write', bucket_policy_arg('write', private_bucket_name))),
         ("mc_check_call", ('admin', 'policy', 'create', 'cwm', f'{private_bucket_name}_delete', bucket_policy_arg('delete', private_bucket_name))),
@@ -80,6 +87,13 @@ async def test_instance_lock_unlock(cwm_test_db):
     await buckets_api.create(instance_id, public_bucket_name, public=True)
     assert tw() == [
         ("mc_check_call", ('mb', f'cwm/{public_bucket_name}')),
+        ("mc_check_call", (
+            'ilm', 'rule', 'add',
+            '--tags', 'cwm-tier=low',
+            '--transition-days', '1',
+            '--transition-tier', 'LOW',
+            f'cwm/{public_bucket_name}',
+        )),
         ("mc_check_call", ('anonymous', "set", 'download', f'cwm/{public_bucket_name}')),
         ("mc_check_call", ('admin', 'policy', 'create', 'cwm', f'{public_bucket_name}_read', bucket_policy_arg('read', public_bucket_name))),
         ("mc_check_call", ('admin', 'policy', 'create', 'cwm', f'{public_bucket_name}_write', bucket_policy_arg('write', public_bucket_name))),
