@@ -82,7 +82,7 @@ async def add_bucket_transition_rule(name):
     await mc_check_call(
         'ilm', 'rule', 'add',
         '--tags', 'cwm-tier=low',
-        '--transition-days', '1',
+        '--transition-days', '0',
         '--transition-tier', 'LOW',
         f'{config.MINIO_MC_PROFILE}/{name}',
     )
