@@ -73,7 +73,7 @@ async def test_instance_lock_unlock(cwm_test_db):
         ("mc_check_call", (
             'ilm', 'rule', 'add',
             '--tags', 'cwm-tier=low',
-            '--transition-days', '1',
+            '--transition-days', '0',
             '--transition-tier', 'LOW',
             f'cwm/{private_bucket_name}',
         )),
@@ -90,7 +90,7 @@ async def test_instance_lock_unlock(cwm_test_db):
         ("mc_check_call", (
             'ilm', 'rule', 'add',
             '--tags', 'cwm-tier=low',
-            '--transition-days', '1',
+            '--transition-days', '0',
             '--transition-tier', 'LOW',
             f'cwm/{public_bucket_name}',
         )),

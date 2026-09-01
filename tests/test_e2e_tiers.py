@@ -5,6 +5,7 @@ import time
 from contextlib import AsyncExitStack
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
+import base64
 
 import dotenv
 import pytest
@@ -42,6 +43,7 @@ async def object_stat(target):
 
 
 async def wait_for_stat(target, description, condition):
+    print("wait for stat", description)
     started = time.monotonic()
     next_progress_report = started
     while True:
@@ -86,6 +88,12 @@ async def test_tier_transitions():
     alias = f'cwme2etiers-{suffix}'
     object_name = 'tier-test-object'
     target = f'{alias}/{bucket_name}/{object_name}'
+
+    print("instance_id:", instance_id)
+    print("mc alias:", alias)
+    print("bucket_name:", bucket_name)
+    print("object_name:", object_name)
+    print("redis key suffix:", base64.b64encode(bucket_name.encode()).decode().rstrip("=")+":"+base64.b64encode(object_name.encode()).decode().rstrip("="))
 
     async with AsyncExitStack() as exit_stack:
         instance = await cwm_minio_api(

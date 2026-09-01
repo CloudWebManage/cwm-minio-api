@@ -27,7 +27,7 @@ async def test_crud(cwm_test_db):
         ("mc_check_call", (
             'ilm', 'rule', 'add',
             '--tags', 'cwm-tier=low',
-            '--transition-days', '1',
+            '--transition-days', '0',
             '--transition-tier', 'LOW',
             f'cwm/{bucket_name}',
         )),
@@ -185,7 +185,7 @@ async def test_bucket_create_lifecycle_failure_rolls_back(cwm_test_db):
         ('mc_check_call', (
             'ilm', 'rule', 'add',
             '--tags', 'cwm-tier=low',
-            '--transition-days', '1',
+            '--transition-days', '0',
             '--transition-tier', 'LOW',
             f'cwm/{bucket_name}',
         )),
