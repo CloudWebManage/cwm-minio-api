@@ -1,5 +1,6 @@
 import os
 import json
+import tempfile
 from contextlib import AsyncExitStack
 
 import dotenv
@@ -118,3 +119,92 @@ async def test():
         await cwm_minio_api('buckets/update', method='put', json=dict(instance_id=instance_id, bucket_name=bucket_name, public=False, blocked=True))
         status, _ = await async_subprocess_status_output(MINIO_MC_BINARY, 'ls', 'cwme2etest', '--json')
         assert status == 1
+
+
+@pytest.mark.skipif(os.getenv("E2E") != 'yes', reason="E2E tests are disabled")
+async def test_versioned_bucket_operations():
+    if not CWM_MINIO_API_URL or not CWM_MINIO_API_USERNAME or not CWM_MINIO_API_PASSWORD:
+        print('Skipping E2E Tests - env vars are not set')
+        return
+
+    tenant_info = await cwm_minio_api('tenant/info')
+    instance_id = '__cwm_e2e_versioning_test_instance__'
+    bucket_name = 'cwm-e2e-versioning-test-bucket'
+    alias = 'cwme2eversioning'
+    object_name = 'versioned-object.txt'
+    target = f'{alias}/{bucket_name}/{object_name}'
+
+    async with AsyncExitStack() as exit_stack:
+        instance = await cwm_minio_api(
+            'instances/create', method='post', json={'instance_id': instance_id},
+        )
+        exit_stack.push_async_callback(
+            cwm_minio_api, 'instances/delete', method='delete', params={'instance_id': instance_id},
+        )
+        await cwm_minio_api(
+            'buckets/create', method='post',
+            json={'instance_id': instance_id, 'bucket_name': bucket_name, 'public': False},
+        )
+        exit_stack.push_async_callback(
+            cwm_minio_api, 'buckets/delete', method='delete',
+            params={'instance_id': instance_id, 'bucket_name': bucket_name},
+        )
+        versioning = await cwm_minio_api(
+            'buckets/versioning', method='put',
+            json={
+                'instance_id': instance_id,
+                'bucket_name': bucket_name,
+                'enabled': True,
+                'expire-delete-marker': False,
+            },
+        )
+        assert versioning['enabled'] is True
+
+        await async_subprocess_check_call(
+            MINIO_MC_BINARY, 'alias', 'set', alias, tenant_info['api_url'],
+            instance['access_key'], instance['secret_key'],
+        )
+        exit_stack.push_async_callback(
+            async_subprocess_check_call, MINIO_MC_BINARY, 'alias', 'rm', alias,
+        )
+        exit_stack.push_async_callback(
+            async_subprocess_check_call, MINIO_MC_BINARY, 'rm', '--versions', '--force', target,
+        )
+
+        version_info = json.loads(await async_subprocess_check_output(
+            MINIO_MC_BINARY, 'version', 'info', f'{alias}/{bucket_name}', '--json',
+        ))
+        assert version_info['versioning']['status'] == 'Enabled'
+
+        with tempfile.NamedTemporaryFile(mode='w+') as object_file:
+            object_file.write('version one')
+            object_file.flush()
+            await async_subprocess_check_call(MINIO_MC_BINARY, 'cp', object_file.name, target)
+
+            object_file.seek(0)
+            object_file.truncate()
+            object_file.write('version two')
+            object_file.flush()
+            await async_subprocess_check_call(MINIO_MC_BINARY, 'cp', object_file.name, target)
+
+        versions = parse_json_lines(await async_subprocess_check_output(
+            MINIO_MC_BINARY, 'ls', '--versions', target, '--json',
+        ))
+        assert len(versions) == 2
+        assert all(version['key'] == object_name for version in versions)
+        latest = next(version for version in versions if version['isLatest'])
+        previous = next(version for version in versions if not version['isLatest'])
+
+        assert await async_subprocess_check_output(MINIO_MC_BINARY, 'cat', target) == 'version two'
+        assert await async_subprocess_check_output(
+            MINIO_MC_BINARY, 'cat', '--version-id', previous['versionId'], target,
+        ) == 'version one'
+
+        await async_subprocess_check_call(
+            MINIO_MC_BINARY, 'rm', '--version-id', previous['versionId'], target,
+        )
+        remaining_versions = parse_json_lines(await async_subprocess_check_output(
+            MINIO_MC_BINARY, 'ls', '--versions', target, '--json',
+        ))
+        assert len(remaining_versions) == 1
+        assert remaining_versions[0]['versionId'] == latest['versionId']
