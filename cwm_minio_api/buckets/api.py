@@ -97,6 +97,7 @@ async def create(instance_id, bucket_name, public=False):
         assert await cur.fetchone(), 'Bucket already exists'
         async with AsyncExitStack() as exit_stack:
             await minio_api.create_bucket(bucket_name, exit_stack=exit_stack)
+            await minio_api.add_bucket_transition_rule(bucket_name)
             if public:
                 await minio_api.bucket_anonymous_set_download(bucket_name, exit_stack=exit_stack)
             await common.async_run_batches([

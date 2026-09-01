@@ -104,6 +104,12 @@ async def cwm_test_minio(monkeypatch, test_db):
     test_prefix = f'cwmtest-{uuid1().hex[:10]}'
     minio_host = os.getenv('CWM_TEST_MINIO_HOST', 'localhost')
     monkeypatch.setattr('cwm_minio_api.config.MINIO_MC_PROFILE', 'cwmtest')
+
+    async def skip_transition_rule(_bucket_name):
+        pass
+
+    # The standalone test MinIO has no remote LOW tier configured.
+    monkeypatch.setattr('cwm_minio_api.minio.api.add_bucket_transition_rule', skip_transition_rule)
     await async_subprocess_check_call(MINIO_MC_BINARY, 'alias', 'set', 'cwmtest', f'http://{minio_host}:9000', 'cwm', '12345678')
     print(f'Using MinIO test prefix: {test_prefix}')
     yield 'cwmtest', test_prefix

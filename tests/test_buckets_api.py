@@ -24,6 +24,13 @@ async def test_crud(cwm_test_db):
     created_bucket = await buckets_api.create(instance_id, bucket_name)
     assert tw() == [
         ("mc_check_call", ('mb', f'cwm/{bucket_name}')),
+        ("mc_check_call", (
+            'ilm', 'rule', 'add',
+            '--tags', 'cwm-tier=low',
+            '--transition-days', '1',
+            '--transition-tier', 'LOW',
+            f'cwm/{bucket_name}',
+        )),
         ("mc_check_call", ('admin', 'policy', 'create', 'cwm', f'{bucket_name}_read', cwm_test_db['get_bucket_policy_arg']('read', bucket_name))),
         ("mc_check_call", ('admin', 'policy', 'create', 'cwm', f'{bucket_name}_write', cwm_test_db['get_bucket_policy_arg']('write', bucket_name))),
         ("mc_check_call", ('admin', 'policy', 'create', 'cwm', f'{bucket_name}_delete', cwm_test_db['get_bucket_policy_arg']('delete', bucket_name))),
@@ -156,6 +163,35 @@ async def test_bucket_create_minio_exception(cwm_test_db, monkeypatch):
         assert str(e) == 'simulated error'
     else:
         raise AssertionError('Expected exception was not raised')
+
+
+async def test_bucket_create_lifecycle_failure_rolls_back(cwm_test_db):
+    instance_id = 'test_instance_1'
+    bucket_name = 'test-bucket-1'
+    await instances_api.create(instance_id)
+    cwm_test_db['tracker_get_calls']()
+
+    async def intercept(f, name, *args):
+        if name == 'mc_check_call' and args[:3] == ('ilm', 'rule', 'add'):
+            raise AssertionError('unable to add transition rule')
+        return await f(*args)
+
+    cwm_test_db['intercept'] = intercept
+    with pytest.raises(AssertionError, match='unable to add transition rule'):
+        await buckets_api.create(instance_id, bucket_name)
+
+    assert cwm_test_db['tracker_get_calls']() == [
+        ('mc_check_call', ('mb', f'cwm/{bucket_name}')),
+        ('mc_check_call', (
+            'ilm', 'rule', 'add',
+            '--tags', 'cwm-tier=low',
+            '--transition-days', '1',
+            '--transition-tier', 'LOW',
+            f'cwm/{bucket_name}',
+        )),
+        ('mc_check_call', ('rb', f'cwm/{bucket_name}', '--force')),
+    ]
+    assert await buckets_api.get(instance_id, bucket_name) is None
 
 
 async def test_update_versioning_defaults(cwm_test_db):

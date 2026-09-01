@@ -78,6 +78,16 @@ async def create_bucket(name, exit_stack=None):
     await mc_check_call('mb', f'{config.MINIO_MC_PROFILE}/{name}')
 
 
+async def add_bucket_transition_rule(name):
+    await mc_check_call(
+        'ilm', 'rule', 'add',
+        '--tags', 'cwm-tier=low',
+        '--transition-days', '1',
+        '--transition-tier', 'LOW',
+        f'{config.MINIO_MC_PROFILE}/{name}',
+    )
+
+
 async def delete_bucket(name):
     await mc_check_call('rb', f'{config.MINIO_MC_PROFILE}/{name}', '--force')
 
