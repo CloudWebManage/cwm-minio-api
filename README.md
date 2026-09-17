@@ -99,6 +99,13 @@ uv run pytest
 
 ## Load Tests
 
+For reproducible, bounded, resumable campaigns, use the
+[campaign CLI and stage-by-stage guide](cwm_minio_api/load_tests/README.md).
+It includes version/checksum verification, tier metadata gates, distributed
+Locust traffic, private worker export, and ownership-scoped cleanup.
+
+### Legacy interactive profile
+
 Start Redis container:
 
 ```

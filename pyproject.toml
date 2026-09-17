@@ -33,6 +33,7 @@ load-test = [
     "botocore>=1.42.35",
     "locust>=2.43.1",
     "redis>=7.1.0",
+    "xlsxwriter>=3.2.9",
 ]
 
 [tool.pytest.ini_options]
