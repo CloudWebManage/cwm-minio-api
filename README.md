@@ -29,7 +29,7 @@ Prerequisites:
 * Docker
 * Minio MC
   * Get the version from the Dockerfile `MINIO_VERSION`
-  * Run the docker image: `docker run --rm --name minio -d minio/minio:<MINIO_VERSION> server /srv`
+  * Run the docker image: `docker run --rm --name minio -d quay.io/minio/minio:<MINIO_VERSION> server /srv`
   * Copy the `mc` binary: `docker cp minio:/usr/bin/mc /usr/local/bin/mc`
   * Create Minio cwm profile connected to relevant cluster: `mc alias set cwm MINIO_URL USER PASSWORD`
 
