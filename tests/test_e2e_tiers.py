@@ -131,7 +131,8 @@ async def test_tier_transitions():
             lambda stat: stat.get('metadata', {}).get('X-Amz-Storage-Class') == 'LOW',
         )
 
-        for _ in range(3):
+        # The tierer uses a strict >3 high threshold in the current-hour window.
+        for _ in range(4):
             await async_subprocess_check_output(MINIO_MC_BINARY, 'cat', target)
 
         await wait_for_stat(target, 'object restore to high tier', is_restored)

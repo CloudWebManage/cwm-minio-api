@@ -29,7 +29,7 @@ Prerequisites:
 * Docker
 * Minio MC
   * Get the version from the Dockerfile `MINIO_VERSION`
-  * Run the docker image: `docker run --rm --name minio -d minio/minio:<MINIO_VERSION> server /srv`
+  * Run the docker image: `docker run --rm --name minio -d quay.io/minio/minio:<MINIO_VERSION> server /srv`
   * Copy the `mc` binary: `docker cp minio:/usr/bin/mc /usr/local/bin/mc`
   * Create Minio cwm profile connected to relevant cluster: `mc alias set cwm MINIO_URL USER PASSWORD`
 
@@ -98,6 +98,13 @@ uv run pytest
 ```
 
 ## Load Tests
+
+For reproducible, bounded, resumable campaigns, use the
+[campaign CLI and stage-by-stage guide](cwm_minio_api/load_tests/README.md).
+It includes version/checksum verification, tier metadata gates, distributed
+Locust traffic, private worker export, and ownership-scoped cleanup.
+
+### Legacy interactive profile
 
 Start Redis container:
 

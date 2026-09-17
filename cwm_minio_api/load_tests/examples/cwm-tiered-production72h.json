@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "run_id": "campaign-tier-production72h-001",
+  "state_dir": "/var/tmp/cwm-campaign/campaign-tier-production72h-001",
+  "seed": 17,
+  "target": {
+    "mode": "cwm-api",
+    "endpoint_env": "CAMPAIGN_S3_ENDPOINT",
+    "api_url_env": "CAMPAIGN_API_URL",
+    "api_username_env": "CAMPAIGN_API_USERNAME",
+    "api_password_env": "CAMPAIGN_API_PASSWORD"
+  },
+  "limits": {
+    "users": 2,
+    "inflight": 2,
+    "rps": 20,
+    "requests": 100000,
+    "bytes": 536870912,
+    "duration_seconds": 10,
+    "versions_per_key": 8
+  },
+  "dataset": {"objects": 1, "sizes": [65536]},
+  "tier": {
+    "storage_class": "LOW",
+    "low_hours": 72,
+    "low_threshold": 3,
+    "high_hours": 72,
+    "high_include_current": true,
+    "high_threshold": 3,
+    "restore_days": 1,
+    "poll_seconds": 60,
+    "timeout_seconds": 604800,
+    "renewal_delay_seconds": 60,
+    "renewal_safety_seconds": 60
+  }
+}
