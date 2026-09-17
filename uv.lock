@@ -264,6 +264,7 @@ dependencies = [
     { name = "requests" },
     { name = "uvicorn" },
     { name = "uvicorn-worker" },
+    { name = "xlsxwriter" },
 ]
 
 [package.optional-dependencies]
@@ -296,6 +297,7 @@ requires-dist = [
     { name = "requests", specifier = ">=2.32.5" },
     { name = "uvicorn", specifier = ">=0.35.0" },
     { name = "uvicorn-worker", specifier = ">=0.3.0" },
+    { name = "xlsxwriter", specifier = ">=3.2.9" },
     { name = "xlsxwriter", marker = "extra == 'load-test'", specifier = ">=3.2.9" },
 ]
 provides-extras = ["load-test"]
