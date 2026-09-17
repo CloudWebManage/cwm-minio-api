@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = ">=3.12"
 
 [[package]]
@@ -253,6 +253,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "asyncclick" },
+    { name = "botocore" },
     { name = "click" },
     { name = "fastapi", extra = ["standard"] },
     { name = "orjson" },
@@ -280,6 +281,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "asyncclick", specifier = ">=8.1.8" },
+    { name = "botocore", specifier = ">=1.42.35" },
     { name = "botocore", marker = "extra == 'load-test'", specifier = ">=1.42.35" },
     { name = "click", specifier = ">=8.2.1" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.116.1" },
