@@ -1,8 +1,9 @@
 """Version-bound, sampled lifecycle proofs; no GETs from observation helpers."""
 import time
 
-from .config import Aborted, CampaignError, Inconclusive
-from .timing import deadline
+from .config import Aborted, CampaignError, Inconclusive, TransientFailure
+from .control import assert_tier_versioning
+from .timing import deadline, sleep_checked
 
 
 def expiry(head):
@@ -11,13 +12,19 @@ def expiry(head):
     return value.timestamp() if value else None
 
 
+def is_storage_class(head, expected):
+    """Accept identical repeated HTTP values; keep the raw header as evidence."""
+    value = head.get("StorageClass")
+    return isinstance(value, str) and all(part.strip() == expected for part in value.split(","))
+
+
 def record_head(state, stage, rec, result, at=None):
     role = rec["bucket"].rsplit("-", 1)[1]
     snapshot = {k: result[k] for k in ("StorageClass", "Restore", "VersionId", "ContentLength", "Metadata") if k in result}
     restore = result.get("Restore", "")
     storage = state.manifest.tier.storage_class if state.manifest.tier else "LOW"
     classification = ("restoring" if 'ongoing-request="true"' in restore else "restored" if expiry(result) else
-                      "cold" if result.get("StorageClass") == storage and not restore else "local" if not restore else "invalid")
+                      "cold" if is_storage_class(result, storage) and not restore else "local" if not restore else "invalid")
     return state.observe(stage, role, rec, "head", {**snapshot, "state": classification}, at)
 
 
@@ -46,6 +53,7 @@ class TierStages:
         self.stage = stage
         self.check()
         for role in ("cold", "quiet", "expiry"):
+            assert_tier_versioning(self.m, self.store, role)
             self.records(role)  # Exact, nonempty membership before every gate.
 
     def gate(self, name, rec, status="passed", **proof):
@@ -66,6 +74,9 @@ class TierStages:
         role = rec["bucket"].rsplit("-", 1)[1]
         try:
             result = self.store.head(rec, current=True)
+        except TransientFailure:
+            self.state.observe(self.stage, role, rec, "head", {"state": "unavailable"}, self.clock())
+            raise
         except CampaignError:
             self.state.observe(self.stage, role, rec, "head", {"state": "invalid"}, self.clock())
             raise
@@ -78,7 +89,7 @@ class TierStages:
         for rec in self.records("quiet"):
             head = self.head(rec)
             prior = self.state.get("gate:cold:" + rec["op"])
-            if prior and (head.get("StorageClass") != self.tier.storage_class or head.get("Restore")):
+            if prior and (not is_storage_class(head, self.tier.storage_class) or head.get("Restore")):
                 self.gate("quiet-sample", rec, "failed", reason="quiet object was not cold at sampling instant")
                 raise CampaignError("quiet control unexpectedly restored at a sampled instant")
         self.next_quiet = self.clock() + self.tier.poll_seconds
@@ -95,7 +106,7 @@ class TierStages:
         self.start("cold")
         for role in ("cold", "quiet", "expiry"):
             for rec in self.records(role):
-                self.wait(rec, lambda h: h.get("StorageClass") == self.tier.storage_class and not h.get("Restore"))
+                self.wait(rec, lambda h: is_storage_class(h, self.tier.storage_class) and not h.get("Restore"))
                 self.gate("cold", rec)
         return {"current_objects_metadata_confirmed": True, "rules": self.tier.model_dump(),
                 "rules_source": "operator-supplied; not server configuration introspection"}
@@ -132,7 +143,7 @@ class TierStages:
         for role in ("cold", "expiry"):
             for rec in self.records(role):
                 head = self.head(rec)
-                if head.get("StorageClass") != self.tier.storage_class or head.get("Restore"):
+                if not is_storage_class(head, self.tier.storage_class) or head.get("Restore"):
                     raise CampaignError("heating requires a confirmed cold current version")
                 self.heat_object(rec, True)
         self.sample_quiet(force=True)
@@ -141,18 +152,36 @@ class TierStages:
 
     def restore(self):
         self.start("restore")
-        for role in ("cold", "expiry"):
-            for rec in self.records(role):
-                heated = self.prerequisite("heat", rec)["value"]
-                head = self.wait(rec, lambda h: self.clock() >= heated["eligible_at"] and expiry(h) is not None)
-                ongoing = self.state.db.execute("SELECT count(*) FROM observations WHERE op=? AND version_id=? AND ts>=? AND kind='head' AND json_extract(value,'$.state')='restoring'",
-                                                (rec["op"], rec["version_id"], heated["started"])).fetchone()[0]
-                if not ongoing:
-                    raise Inconclusive("restore completed but ongoing state was not observed")
-                expires = expiry(head)
-                if expires <= self.clock() + (self.tier.restore_days - 1) * 86400:
-                    raise CampaignError("restore expiry does not satisfy configured restore-days lower bound")
-                self.gate("restore", rec, expiry=expires, observed=self.clock(), ongoing_observed=True)
+        pending = [(rec, self.prerequisite("heat", rec)["value"])
+                   for role in ("cold", "expiry") for rec in self.records(role)]
+        end = self.clock() + self.tier.timeout_seconds
+        timeout = Inconclusive("metadata gate timeout; transition was not proven")
+        with deadline(self.tier.timeout_seconds, self.check, timeout):
+            while pending:
+                self.check()
+                self.sample_quiet()
+                completed = []
+                for rec, heated in pending:
+                    head = self.head(rec)
+                    if self.clock() < heated["eligible_at"] or expiry(head) is None:
+                        continue
+                    ongoing = self.state.db.execute("SELECT count(*) FROM observations WHERE op=? AND version_id=? AND ts>=? AND kind='head' AND json_extract(value,'$.state')='restoring'",
+                                                    (rec["op"], rec["version_id"], heated["started"])).fetchone()[0]
+                    if not ongoing:
+                        raise Inconclusive("restore completed but ongoing state was not observed")
+                    expires = expiry(head)
+                    if expires <= self.clock() + (self.tier.restore_days - 1) * 86400:
+                        raise CampaignError("restore expiry does not satisfy configured restore-days lower bound")
+                    self.gate("restore", rec, expiry=expires, observed=self.clock(), ongoing_observed=True)
+                    completed.append((rec, heated))
+                for item in completed:
+                    pending.remove(item)
+                if not pending:
+                    break
+                if self.clock() >= end:
+                    raise timeout
+                sleep_checked(min(self.tier.poll_seconds, end - self.clock()), self.check,
+                              self.clock, self.sleep)
         return {"restore_ongoing_and_completed": True}
 
     def active(self, rec, original_expiry):
@@ -185,7 +214,7 @@ class TierStages:
         for rec in self.records("expiry"):
             original = self.prerequisite("restore", rec)["value"]
             self.wait(rec, lambda h: self.clock() > original["expiry"] and not h.get("Restore")
-                      and h.get("StorageClass") == self.tier.storage_class)
+                      and is_storage_class(h, self.tier.storage_class))
             self.gate("expiry", rec, original_expiry=original["expiry"], observed_at=self.clock())
         self.sample_quiet(force=True)
         return {"restore_expired": True, "quiet_control_samples_valid": True,

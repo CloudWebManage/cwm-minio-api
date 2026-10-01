@@ -45,9 +45,10 @@ def test_runtime_api_creation_is_once_private_and_target_change_refused(manifest
         runtime(m, state)
 
 
-def test_tier_cycle_uses_real_metadata_gates_and_isolated_cohorts(manifest_data, monkeypatch):
+@pytest.mark.parametrize("bucket_versioning", [True, False])
+def test_tier_cycle_uses_real_metadata_gates_and_isolated_cohorts(manifest_data, monkeypatch, bucket_versioning):
     from test_review_tiers import setup, restored_cycle
-    tier, s3, clock = setup(manifest_data)
+    tier, s3, clock = setup(manifest_data, tier_changes={"bucket_versioning": bucket_versioning})
     restored_cycle(tier, s3, clock)
     assert s3.read_roles.count("cold") == 5
     assert s3.read_roles.count("expiry") == 5
@@ -77,6 +78,31 @@ def test_restore_completed_without_observed_ongoing_is_inconclusive(manifest_dat
         s3.modes[role] = ("restored", 102 * 86400)
     with pytest.raises(Inconclusive, match="ongoing"):
         tier.restore()
+
+
+def test_restore_observes_overlapping_cohorts_without_serial_blind_spot(manifest_data):
+    from test_review_tiers import setup
+    tier, s3, clock = setup(manifest_data)
+    clock.now -= 300
+    tier.cold()
+    tier.heat()
+    restore_started = clock()
+    original_head = s3.head_object
+
+    def head_object(**kwargs):
+        role = kwargs["Bucket"].rsplit("-", 1)[1]
+        elapsed = clock() - restore_started
+        if role == "cold":
+            s3.modes[role] = ("restoring" if elapsed < 3 else "restored", 102 * 86400)
+        elif role == "expiry":
+            s3.modes[role] = ("restoring" if elapsed < 1 else "restored", 102 * 86400)
+        return original_head(**kwargs)
+
+    s3.head_object = head_object
+    assert tier.restore() == {"restore_ongoing_and_completed": True}
+    for role in ("cold", "expiry"):
+        rec = tier.records(role)[0]
+        assert tier.prerequisite("restore", rec)["value"]["ongoing_observed"] is True
 
 
 @pytest.mark.parametrize("unexpected_write", [False, True])

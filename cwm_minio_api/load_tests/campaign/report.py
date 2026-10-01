@@ -136,6 +136,9 @@ def render(manifest, state):
              "| Cell | Outcome | Evidence/reason |", "|---|---|---|"]
     for stage, row in matrix.items():
         lines.append(f"| {stage} | {row['status']} | {row.get('reason', 'See results.json and Locust artifacts')} |")
+    if manifest.tier:
+        mode = "versioned" if manifest.tier.bucket_versioning else "never-versioned"
+        lines += ["", f"Lifecycle buckets (cold, quiet, expiry): **{mode}**. The separate versioning control remains enabled."]
     lines += ["", "Tiering applies to current objects only. Quiet and expiry cohorts are HEAD-only outside explicit heating.",
               "Version-specific cold reads contribute to logical-key access counters; historical auto-tiering is not asserted."]
     check_path(state.path / "report.md")

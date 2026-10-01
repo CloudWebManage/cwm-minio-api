@@ -13,7 +13,7 @@ from .state import ReadState
 from .tier import expiry
 
 
-COHORT_STATES = ("missing", "unknown", "invalid", "local", "cold", "restoring", "restored")
+COHORT_STATES = ("missing", "unknown", "unavailable", "invalid", "local", "cold", "restoring", "restored")
 GATES = ("cold", "heat", "restore", "renewal", "expiry")
 
 

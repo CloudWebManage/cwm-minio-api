@@ -4,11 +4,25 @@ from contextlib import nullcontext
 
 import botocore.session
 from botocore.config import Config
-from botocore.exceptions import ClientError
+from botocore.exceptions import (ClientError, ConnectionClosedError, ConnectTimeoutError,
+                                 EndpointConnectionError, ReadTimeoutError, ResponseStreamingError)
 
-from .config import Aborted, CampaignError, Inconclusive
+from .config import Aborted, CampaignError, Inconclusive, TransientFailure
 from .budget import BudgetExhausted
-from .timing import deadline
+from .timing import deadline, sleep_checked
+
+
+SAFE_READS = frozenset({"head_bucket", "head_object", "get_bucket_versioning",
+                       "list_object_versions", "list_multipart_uploads", "list_objects_v2"})
+
+
+def transient(exc):
+    if isinstance(exc, (TransientFailure, ConnectionClosedError, ConnectTimeoutError,
+                        EndpointConnectionError, ReadTimeoutError, ResponseStreamingError, ConnectionError, TimeoutError)):
+        return True
+    return isinstance(exc, ClientError) and (
+        exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode") in (429, 500, 502, 503, 504)
+        or code(exc) in ("SlowDown", "RequestTimeout", "ServiceUnavailable", "InternalError"))
 
 
 def payload(seed, key, generation, size):
@@ -20,7 +34,7 @@ def client(manifest, runtime):
     return botocore.session.get_session().create_client(
         "s3", endpoint_url=runtime["endpoint"], region_name=manifest.target.region,
         aws_access_key_id=runtime["access_key"], aws_secret_access_key=runtime["secret_key"],
-        config=Config(retries={"total_max_attempts": 1}, connect_timeout=5, read_timeout=5,
+        config=Config(retries={"total_max_attempts": 1}, connect_timeout=15, read_timeout=30,
                       max_pool_connections=manifest.limits.inflight, s3={"addressing_style": "path"}))
 
 
@@ -44,10 +58,37 @@ class ObjectStore:
             raise Aborted("stop requested")
 
     def call(self, operation, *, size=0, expected=(), validate=None, before=None, body_factory=None, **kwargs):
+        # Controller GETs may trigger heat/restore: count every real attempt and
+        # validate the full body again. Measured traffic keeps single attempts.
+        controller_get = operation == "get_object" and self.stage in {"seed", "versions", "heat", "restore", "renew", "verify"}
+        safe = (operation in SAFE_READS or controller_get) and before is None and body_factory is None
+        if not safe:
+            return self._call_once(operation, size=size, expected=expected, validate=validate,
+                                   before=before, body_factory=body_factory, **kwargs)
+        unavailable = TransientFailure(f"{operation}: transient read recovery exhausted")
+        with deadline(120, self.check_stop, unavailable):
+            for attempt in range(5):
+                try:
+                    return self._call_once(operation, size=size, expected=expected, validate=validate,
+                                           timeout=self.io_timeout if controller_get else max(30, self.io_timeout), retryable=True, **kwargs)
+                except TransientFailure as exc:
+                    if attempt == 4:
+                        raise TransientFailure(f"{exc}; read recovery exhausted") from None
+                    def check():
+                        self.check_stop()
+                        if self.budget:
+                            self.budget.check()
+                        if self.guard:
+                            self.guard()
+                    sleep_checked(min(8, 2 ** attempt), check)
+
+    def _call_once(self, operation, *, size=0, expected=(), validate=None, before=None,
+                   body_factory=None, timeout=None, retryable=False, **kwargs):
         if self.guard:
             self.guard()
         admission = self.budget.request(size) if self.budget else nullcontext()
-        with admission, deadline(self.io_timeout, self.check_stop):
+        timeout_error = TransientFailure(f"{operation}: read deadline exceeded") if retryable else None
+        with admission, deadline(timeout or self.io_timeout, self.check_stop, timeout_error):
             if body_factory:
                 kwargs["Body"] = body_factory()
             if before:
@@ -67,11 +108,13 @@ class ObjectStore:
                 if validate:
                     transferred = validate(result) or 0
                 return result
-            except (CampaignError, KeyboardInterrupt):
-                error_name = "ValidationError"
+            except (CampaignError, KeyboardInterrupt) as exc:
+                error_name = "TransientFailure" if isinstance(exc, TransientFailure) else "ValidationError"
                 raise
             except Exception as exc:
                 error_name = code(exc)
+                if retryable and transient(exc):
+                    raise TransientFailure(f"{operation}: {error_name}") from None
                 raise CampaignError(f"{operation}: {error_name}") from None
             finally:
                 if self.metric:
@@ -173,12 +216,14 @@ class ObjectStore:
         def consume(response):
             body = response["Body"]
             digest, total = hashlib.sha256(), 0
-            deadline = time.monotonic() + 10
+            body_end = time.monotonic() + self.io_timeout
             try:
                 if response.get("VersionId", "null") != rec["version_id"]:
                     raise CampaignError("GET version identity mismatch")
                 while chunk := body.read(1024 * 1024):
-                    if time.monotonic() > deadline:
+                    if time.monotonic() > body_end:
+                        if self.stage in {"seed", "versions", "heat", "restore", "renew", "verify"}:
+                            raise TransientFailure("full-body read deadline exceeded")
                         raise CampaignError("full-body read deadline exceeded")
                     digest.update(chunk)
                     total += len(chunk)

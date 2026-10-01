@@ -77,7 +77,7 @@ class Renewal:
                 or not checkpoint["ts"] <= after["ts"] <= observed <= recorded_at < original_expiry < value["after_expiry"]):
             raise Inconclusive("saved renewal completion proof is outside the initial restore lifetime")
         for row in self.state.observations(op=rec["op"], version_id=rec["version_id"], after=before["seq"], before=after["seq"]):
-            if row["kind"] == "head" and row["value"].get("state") != "restored":
+            if row["kind"] == "head" and row["value"].get("state") not in ("restored", "unavailable"):
                 raise Inconclusive("renewal timeline contains an unproven or interrupted restore cycle")
 
     def completed(self, rec, initial, progress, checkpoint, before):

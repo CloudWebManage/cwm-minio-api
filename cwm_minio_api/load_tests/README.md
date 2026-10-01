@@ -11,6 +11,25 @@ Use Python 3.12+ and the locked `load-test` extra. No API server, database, or
 Kubernetes access is required for fixture campaigns or offline tests. The campaign
 is independent of the older interactive `load_tests/locustfile.py` profile.
 
+Controller S3 metadata reads and CWM API GETs tolerate temporary timeouts,
+connection failures, throttling and server errors with five attempts, checked
+1/2/4/8-second backoffs and a 120-second total recovery window. Metadata/API read
+attempts allow 30 seconds; S3 socket connect/read timeouts are 15/30 seconds.
+Controller payload GETs in seed/version/heat/restore/renew/verify retry transient
+failures while retaining the manifest's per-attempt deadline and complete checksum
+validation. Measured traffic payload GETs retain single-attempt behavior. Every
+actual S3 attempt remains measured and charged to the budgets. Ambiguous writes
+use their existing intent/reconciliation protocol; authentication, TLS, invalid
+responses and checksum/identity failures are never automatically retried.
+
+Exhausted read recovery produces an `inconclusive` stage receipt with
+`failure_kind: transient-read`. Failed HEAD reads leave an `unavailable` observation
+gap instead of claiming that object identity changed. The worker-cluster agent
+can reconstruct its owned SSH/forwards/monitor and resume supported lifecycle
+stages from durable evidence. Renewal still needs valid before/after snapshots
+inside the original restore lifetime, and missed lifecycle proof stays
+inconclusive. See the worker agent guide for reconstruction limits and progress.
+
 ## Exact CLI contract
 
 Let `campaign` below mean this shell function (works from worker-cluster too):
@@ -146,6 +165,7 @@ the following defaults (the shown `true` is an example policy choice, not a defa
 
 ```json
 {
+  "bucket_versioning": true,
   "storage_class": "LOW",
   "low_hours": 1,
   "low_threshold": 3,
@@ -168,6 +188,14 @@ The named test profile uses 1h low / 1h high / include-current **true**. The nam
 production profile uses 72h low / 72h high / include-current **true**. Both use
 `restore_days: 1`. Rules are recorded as operator-supplied
 expectations, not claimed to be introspected from the tierer configuration.
+
+`bucket_versioning` defaults to `true`. Set it to `false` for a fresh lifecycle
+test with never-versioned `cold`, `quiet`, and `expiry` buckets. Preparation and
+each lifecycle stage reject enabled or suspended buckets in this mode; the
+harness does not suspend versioning to approximate an unversioned bucket.
+The separate `versioned` control still runs version-history correctness and
+traffic checks. Reports record the lifecycle mode in `tier_rules` and `report.md`.
+The default retains existing v1 canonical manifest hashes.
 
 `coordination`: required `redis_url_env`, `dedicated: true`; optional
 `expected_workers` (default 1, 1..1000), `rendezvous_seconds` (default 60, 5..600).
@@ -287,8 +315,10 @@ campaign archive "$M"
   window at the next UTC hour; restore confirmation waits for that eligibility.
   `high_hours` controls the recorded retention window, not the number of heating GETs.
 * `restore` requires observed `ongoing-request="true"`, then `false` with a future
-  expiry satisfying the configured restore-days lower bound. A missed transient
-  ongoing state is explicitly inconclusive, even if completion is observed.
+  expiry satisfying the configured restore-days lower bound. It polls all pending
+  cold and expiry objects in round-robin order so one slow restore cannot hide
+  another object's transient ongoing state. A missed transient ongoing state is
+  explicitly inconclusive, even if completion is observed.
 * For unfinished renewal work, `renew` proves the initial restore is still active
   for each expected version and saves **all** before-snapshots before waiting on
   any object. It schedules additional heating at

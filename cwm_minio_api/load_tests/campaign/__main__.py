@@ -10,7 +10,7 @@ import time
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
-from .config import Aborted, CampaignError, Inconclusive, Manifest, STAGES, check_path, endpoint, env, load_manifest
+from .config import Aborted, CampaignError, Inconclusive, TransientFailure, Manifest, STAGES, check_path, endpoint, env, load_manifest
 from .state import State, private_json
 
 
@@ -150,6 +150,9 @@ def run_stage(name, control, runtime_data, coordinator, args):
     except (KeyboardInterrupt, Aborted):
         result.update(status="aborted", reason="stop/interruption; dataset and journal retained")
         raise Aborted(result["reason"]) from None
+    except TransientFailure as exc:
+        result.update(status="inconclusive", reason=str(exc), failure_kind="transient-read")
+        raise
     except (Inconclusive, BudgetExhausted) as exc:
         result.update(status="inconclusive", reason=str(exc))
         raise Inconclusive(str(exc)) from None

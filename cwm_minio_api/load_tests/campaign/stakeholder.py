@@ -227,7 +227,7 @@ def _lifecycle(state):
     rows = []
     for cohort, kind, label, status, count, first, last in bounded(state.db.execute(query)):
         rows.append({"cohort": enum(cohort, ROLES, "other"), "kind": enum(kind, ("head", "gate"), "other"),
-                     "observation": enum(label, ("cold", "heat", "restore", "renewal", "expiry", "local", "restoring", "restored", "invalid")),
+                     "observation": enum(label, ("cold", "heat", "restore", "renewal", "expiry", "local", "restoring", "restored", "unavailable", "invalid")),
                      "status": enum(status, STATUSES), "observations": count,
                      "first_utc": utc(first) if number(first) is not None else None,
                      "last_utc": utc(last) if number(last) is not None else None})

@@ -17,6 +17,10 @@ class Inconclusive(CampaignError):
     pass
 
 
+class TransientFailure(Inconclusive):
+    """A bounded, safe read exhausted transport retries; durable state is retained."""
+
+
 class Aborted(CampaignError):
     pass
 
@@ -88,6 +92,7 @@ class Dataset(StrictModel):
 
 
 class Tier(StrictModel):
+    bucket_versioning: bool = True
     storage_class: str = "LOW"
     low_hours: int = Field(default=1, ge=1, le=8760)
     low_threshold: int = Field(default=3, ge=0)
@@ -143,7 +148,11 @@ class Manifest(StrictModel):
         return hashlib.sha256(self.canonical().encode()).hexdigest()
 
     def canonical(self):
-        return json.dumps(self.model_dump(), sort_keys=True, separators=(",", ":"))
+        data = self.model_dump()
+        # Preserve existing v1 hashes for the original versioned lifecycle mode.
+        if self.tier and self.tier.bucket_versioning:
+            data["tier"].pop("bucket_versioning")
+        return json.dumps(data, sort_keys=True, separators=(",", ":"))
 
     def bucket(self, role):
         if role not in ROLES:

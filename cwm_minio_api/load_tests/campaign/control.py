@@ -4,32 +4,62 @@ import os
 
 import requests
 
-from .config import Aborted, CampaignError, Inconclusive, ROLES, endpoint, env
+from .config import Aborted, CampaignError, Inconclusive, TransientFailure, ROLES, endpoint, env
 from .state import private_json
-from .timing import deadline
+from .timing import deadline, sleep_checked
 
 
 OWNER_KEY = ".cwm-campaign-owner"
 OWNER_BODY = b"cwm campaign ownership\n"
 
 
+def assert_tier_versioning(manifest, store, role):
+    if manifest.tier and not manifest.tier.bucket_versioning and role in ("cold", "quiet", "expiry"):
+        result = store.call("get_bucket_versioning", Bucket=manifest.bucket(role))
+        if result.get("Status") is not None:
+            raise CampaignError("lifecycle bucket must be never-versioned; enabled or suspended state refused")
+
+
 class API:
     def __init__(self, manifest):
         self.url = endpoint(env(manifest.target.api_url_env))
         self.auth = (env(manifest.target.api_username_env), env(manifest.target.api_password_env))
-        self.io_timeout = manifest.limits.request_timeout_seconds
+        self.io_timeout = 120  # Complete safe-read recovery window, including backoff.
+        self.mutation_timeout = manifest.limits.request_timeout_seconds
         self.check = lambda: None
 
     def call(self, method, path, **kwargs):
+        if method.upper() == "GET":
+            unavailable = TransientFailure(f"CWM API {path}: read recovery deadline exceeded")
+            with deadline(self.io_timeout, self.check, unavailable):
+                for attempt in range(5):
+                    try:
+                        return self._call_once(method, path, safe=True, **kwargs)
+                    except TransientFailure:
+                        if attempt == 4:
+                            raise unavailable from None
+                        sleep_checked(min(8, 2 ** attempt), self.check)
+        return self._call_once(method, path, **kwargs)
+
+    def _call_once(self, method, path, safe=False, **kwargs):
         try:
-            with deadline(self.io_timeout, self.check):
-                with requests.request(method, self.url + path, auth=self.auth, timeout=(5, 5),
+            timeout_error = TransientFailure(f"CWM API {path}: read timed out") if safe else None
+            with deadline(min(30, self.io_timeout) if safe else self.mutation_timeout, self.check, timeout_error):
+                with requests.request(method, self.url + path, auth=self.auth, timeout=(15, 30),
                                       allow_redirects=False, **kwargs) as response:
+                    if safe and response.status_code in (429, 500, 502, 503, 504):
+                        raise TransientFailure(f"CWM API {path}: HTTP {response.status_code}")
                     if response.status_code != 200:
                         raise CampaignError(f"CWM API {path}: HTTP {response.status_code}")
                     return response.json()
         except CampaignError:
             raise
+        except requests.exceptions.SSLError:
+            raise CampaignError(f"CWM API {path}: TLS verification failed") from None
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError, requests.exceptions.ChunkedEncodingError) as exc:
+            if safe:
+                raise TransientFailure(f"CWM API {path}: {type(exc).__name__}") from None
+            raise CampaignError(f"CWM API {path}: transport error; mutation may be ambiguous") from None
         except Exception:
             raise CampaignError(f"CWM API {path}: transport or response error; mutation may be ambiguous") from None
 
@@ -115,6 +145,7 @@ class Controller:
             receipt = self.state.get("bucket:" + bucket)
             if receipt == "ready":
                 self.assert_owner(bucket)
+                assert_tier_versioning(self.m, self.store, role)
                 continue
             if not receipt:
                 if self.api:
@@ -145,8 +176,9 @@ class Controller:
                 self.store.call("put_object", Bucket=bucket, Key=OWNER_KEY, Body=OWNER_BODY,
                                 Metadata=self.owner_metadata(), IfNoneMatch="*")
             self.assert_owner(bucket)
-            if role != "plain":
+            if role == "versioned" or (role != "plain" and (not self.m.tier or self.m.tier.bucket_versioning)):
                 self.set_versioning(bucket, True)
+            assert_tier_versioning(self.m, self.store, role)
             self.state.set("bucket:" + bucket, "ready")
         self.state.set("prepared", True)
         return {"buckets": [self.m.bucket(r) for r in ROLES]}
