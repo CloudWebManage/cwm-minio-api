@@ -217,7 +217,7 @@ class TierStages:
                       and is_storage_class(h, self.tier.storage_class))
             self.gate("expiry", rec, original_expiry=original["expiry"], observed_at=self.clock())
         self.sample_quiet(force=True)
-        return {"restore_expired": True, "quiet_control_samples_valid": True,
+        return {"restore_expired": True, "quiet_control_samples_valid": True, "quiet_control_objects": len(self.records("quiet")),
                 "quiet_claim": "cold at recorded sampling instants; intervals between samples are not proven"}
 
     def observe(self):

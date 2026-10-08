@@ -71,3 +71,40 @@ def test_real_redis_atomic_shared_caps_lease_and_key_ownership(manifest_data, mo
             coordinator.guard()
         assert not coordinator.claim("object/1", "worker-b")
         assert coordinator.claim("object/1", "worker-a")
+
+
+@pytest.mark.skipif(not os.getenv('CAMPAIGN_TEST_REDIS_URL'),reason='disposable Redis not configured')
+def test_lost_mutation_replies_do_not_double_admit_publish_or_allocate(manifest_data,monkeypatch):
+    import uuid
+    from cwm_minio_api.load_tests.campaign.distributed import ADMIT,APPEND,TICKET,HEAT_TAKE,HEAT_RECEIPT,HEAT_INIT,JOIN
+    from redis.exceptions import ConnectionError
+    run='reply-test-'+uuid.uuid4().hex[:12]
+    manifest_data.update(run_id=run,state_dir=str(__import__('pathlib').Path(manifest_data['state_dir']).parent/run))
+    manifest_data['coordination']={'redis_url_env':'TEST_REDIS','dedicated':True}
+    monkeypatch.setenv('TEST_REDIS',os.environ['CAMPAIGN_TEST_REDIS_URL'])
+    m=Manifest.model_validate(manifest_data);state=State(m);c=Coordinator(m,state,'http://disposable:9000',initialize=True)
+    actual=c.redis.eval;lost=set()
+    def reply_lost(script,*args):
+        value=actual(script,*args)
+        if script in (ADMIT,APPEND,TICKET,HEAT_TAKE,HEAT_RECEIPT,HEAT_INIT,JOIN) and script not in lost:
+            lost.add(script);raise ConnectionError('synthetic reply loss after mutation')
+        return value
+    with c.lease():
+        monkeypatch.setattr(c.redis,'eval',reply_lost)
+        with c.request(7):pass
+        assert c.usage()['requests']==1 and c.usage()['bytes']==7
+        c.publish_metric({'synthetic':True})
+        assert c.redis.llen(c.prefix+':metrics')==2  # initialization sentinel + one metric
+        c.begin('mixed');assert c.next_ticket('mixed')==0
+        assert c.ticket_positions()['mixed']==1
+        c.session=c.begin('heat')
+        c.heat_initialize(['first','second'],c.now(),c.now()+60)
+        c.join('worker',c.session)
+        with pytest.raises(CampaignError,match='duplicate'):c.join('worker',c.session)
+        assert c.heat_take()=='first'
+        assert c.redis.lrange(c.session+':heat-items',0,-1)==['second']
+        c.heat_receipt('first','receipt')
+        assert c.redis.hgetall(c.session+':heat-receipts')=={'first':'receipt'}
+        with pytest.raises(CampaignError,match='conflicting'):c.heat_receipt('first','other')
+    assert lost=={ADMIT,APPEND,TICKET,HEAT_TAKE,HEAT_RECEIPT,HEAT_INIT,JOIN}
+    state.close()

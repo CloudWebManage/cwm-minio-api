@@ -39,7 +39,8 @@ def lifecycle_metrics(manifest, state):
         gates = {gate: [] for gate in GATES}
         current = state.current(manifest.bucket(role))
         timestamps, expiries, scheduled = [], [], []
-        for i in range(manifest.dataset.objects):
+        from .stages import cohort_size
+        for i in range(cohort_size(manifest, role)):
             rec = current.get(f"seed/{i:06d}")
             if not rec:
                 counts["missing"] += 1

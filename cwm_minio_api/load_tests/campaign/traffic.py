@@ -128,18 +128,18 @@ def _traffic(manifest, state, stage, coordinator, master, bind_host, port, attem
                   coordinator.guard if coordinator else lambda: None,
                   (credentials["access_key"], credentials["secret_key"]))
         if master:
-            deadline = time.time() + 15
-            while coordinator.redis.hlen(coordinator.session + ":outcomes") != manifest.coordination.expected_workers:
+            deadline = time.time() + max(15, manifest.coordination.transport_timeout_seconds+15)
+            while coordinator.retry(lambda:coordinator.redis.hlen(coordinator.session + ":outcomes")) != manifest.coordination.expected_workers:
                 coordinator.guard()
                 if time.time() > deadline:
                     raise CampaignError("worker final outcomes missing; stage cannot pass")
                 time.sleep(0.1)
-            worker_outcomes = [json.loads(value) for value in coordinator.redis.hvals(coordinator.session + ":outcomes")]
+            worker_outcomes = [json.loads(value) for value in coordinator.retry(lambda:coordinator.redis.hvals(coordinator.session + ":outcomes"))]
     except CampaignError as exc:
         failure = exc
     finally:
         if coordinator:
-            coordinator.redis.hset(coordinator.session, "phase", "ended")
+            coordinator.retry(lambda:coordinator.redis.hset(coordinator.session, "phase", "ended"))
             coordinator.collect()
             coordinator.session = None
     outcome = artifacts / "outcome.json"
@@ -167,7 +167,7 @@ def _traffic(manifest, state, stage, coordinator, master, bind_host, port, attem
     return {**result, "artifacts": str(artifacts.relative_to(state.path)), "model": "closed-loop"}
 
 
-def worker(bundle, manifest, data, worker, state_dir, master_host, master_port):
+def worker(bundle, manifest, data, worker, state_dir, master_host, master_port, *, expected_session=None):
     from .state import State
     from .distributed import Coordinator
     from .config import check_path
@@ -179,8 +179,10 @@ def worker(bundle, manifest, data, worker, state_dir, master_host, master_port):
     coord = Coordinator(manifest, state, data["runtime"]["endpoint"], data["redis_url"], incarnation=data["incarnation"])
     deadline = time.time() + manifest.coordination.rendezvous_seconds
     while True:
-        session = coord.redis.get(coord.prefix + ":active")
-        if session and coord.redis.hget(session, "phase") == "rendezvous":
+        session = coord.retry(lambda:coord.redis.get(coord.prefix + ":active"))
+        if expected_session and session != expected_session:
+            raise Aborted("traffic master session changed; worker will not join a different attempt")
+        if session and coord.retry(lambda:coord.redis.hget(session, "phase")) == "rendezvous":
             break
         if time.time() > deadline:
             raise Aborted("worker could not rendezvous with a master")

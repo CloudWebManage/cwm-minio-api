@@ -123,3 +123,25 @@ def test_failed_admissions_consume_bytes_and_rate_is_global(manifest_data):
         with budget.request(1):
             pytest.fail("over-budget operation was admitted")
     assert state.get("budget")["bytes"] == 200
+
+
+def test_bounded_quiet_cohort_is_explicit_and_never_gets_warmed(manifest_data):
+    from cwm_minio_api.load_tests.campaign.stages import seed, require_cohort
+    from types import SimpleNamespace
+    manifest_data['target'] = dict(mode='cwm-api', endpoint_env='URL', api_url_env='API', api_username_env='USER', api_password_env='PASS')
+    manifest_data['tier'] = dict(high_include_current=True, quiet_objects=1)
+    m = Manifest.model_validate(manifest_data)
+    records={};gets=[]
+    def put(bucket,key,generation,size):
+        rec=dict(bucket=bucket,key=key,generation=generation,size=size,kind='put')
+        records.setdefault(bucket,{})[key]=rec
+        return rec
+    store=SimpleNamespace(m=m,put=put,get=lambda rec:gets.append(rec),state=SimpleNamespace(current=lambda bucket:records[bucket]))
+    assert seed(store)['seeded']==9
+    assert len(require_cohort(store,'quiet'))==1
+    assert len(require_cohort(store,'cold'))==2
+    assert all(not rec['bucket'].endswith(('-quiet','-cold','-expiry')) for rec in gets)
+    records[m.bucket('quiet')].clear()
+    with pytest.raises(CampaignError,match='incomplete'):require_cohort(store,'quiet')
+    manifest_data['tier']['quiet_objects']=3
+    with pytest.raises(ValueError):Manifest.model_validate(manifest_data)

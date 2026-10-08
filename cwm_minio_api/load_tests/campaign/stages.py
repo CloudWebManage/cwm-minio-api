@@ -32,10 +32,16 @@ def restored(head):
         return None
 
 
+def cohort_size(manifest, role):
+    if role == "quiet" and manifest.tier and manifest.tier.quiet_objects is not None:
+        return manifest.tier.quiet_objects
+    return manifest.dataset.objects
+
+
 def seed(store):
     results = []
     for role in ("plain", "versioned", "cold", "quiet", "expiry"):
-        for i in range(store.m.dataset.objects):
+        for i in range(cohort_size(store.m, role)):
             size = store.m.dataset.sizes[i % len(store.m.dataset.sizes)]
             rec = store.put(store.m.bucket(role), f"seed/{i:06d}", 0, size)
             # Quiet/expiry objects must not be warmed by the verifier.
@@ -91,7 +97,7 @@ def version_scenario(store, set_versioning):
 
 def require_cohort(store, role):
     current = store.state.current(store.m.bucket(role))
-    expected = {f"seed/{i:06d}" for i in range(store.m.dataset.objects)}
+    expected = {f"seed/{i:06d}" for i in range(cohort_size(store.m, role))}
     if not expected.issubset(current):
         raise CampaignError("incomplete expected seed cohort")
     for i, key in enumerate(sorted(expected)):

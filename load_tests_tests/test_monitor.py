@@ -89,3 +89,15 @@ def test_lifecycle_monitor_has_version_bound_completion_and_timestamp_data(manif
     assert 'cohort="cold",state="restored"} 1' in text
     assert 'cohort="cold",gate="restore"} 1' in text
     assert f'cohort="cold",bound="min"}} {float(102 * 86400)}' in text
+
+
+def test_quiet_monitor_counts_only_the_explicit_control_cohort(manifest_data):
+    from cwm_minio_api.load_tests.campaign.monitor import lifecycle_metrics
+    manifest_data['target']=dict(mode='cwm-api',endpoint_env='URL',api_url_env='API',api_username_env='USER',api_password_env='PASS')
+    manifest_data['dataset']['objects']=8
+    manifest_data['tier']=dict(high_include_current=True,quiet_objects=2)
+    m=Manifest.model_validate(manifest_data);state=State(m)
+    text=lifecycle_metrics(m,state)
+    assert 'cohort="quiet",state="missing"} 2' in text
+    assert 'cohort="cold",state="missing"} 8' in text
+    state.close()

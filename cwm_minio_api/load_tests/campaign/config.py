@@ -92,6 +92,7 @@ class Dataset(StrictModel):
 
 
 class Tier(StrictModel):
+    quiet_objects: int | None = Field(default=None, ge=1, le=100000)
     bucket_versioning: bool = True
     storage_class: str = "LOW"
     low_hours: int = Field(default=1, ge=1, le=8760)
@@ -111,6 +112,16 @@ class Coordination(StrictModel):
     dedicated: Literal[True]
     expected_workers: int = Field(default=1, ge=1, le=1000)
     rendezvous_seconds: int = Field(default=60, ge=5, le=600)
+    transport_timeout_seconds: int = Field(default=5, ge=1, le=120)
+    heartbeat_timeout_seconds: int = Field(default=15, ge=15, le=300)
+    lease_seconds: int = Field(default=60, ge=60, le=600)
+
+    @model_validator(mode="after")
+    def recovery_windows(self):
+        if self.transport_timeout_seconds >= self.heartbeat_timeout_seconds or self.lease_seconds < self.heartbeat_timeout_seconds+self.transport_timeout_seconds:
+            raise ValueError("coordination recovery must fit within heartbeat and lease safety windows")
+        return self
+
 
 
 ROLES = ("plain", "versioned", "cold", "quiet", "expiry")
@@ -137,6 +148,8 @@ class Manifest(StrictModel):
         check_path(path)
         if self.tier and self.target.mode != "cwm-api":
             raise ValueError("real tier campaign requires cwm-api mode")
+        if self.tier and self.tier.quiet_objects is not None and self.tier.quiet_objects > self.dataset.objects:
+            raise ValueError("quiet control count cannot exceed the dataset count")
         return self
 
     @property
@@ -152,6 +165,12 @@ class Manifest(StrictModel):
         # Preserve existing v1 hashes for the original versioned lifecycle mode.
         if self.tier and self.tier.bucket_versioning:
             data["tier"].pop("bucket_versioning")
+        if self.tier and self.tier.quiet_objects is None:
+            data["tier"].pop("quiet_objects")
+        if self.coordination:
+            for key, default in (("transport_timeout_seconds", 5), ("heartbeat_timeout_seconds", 15), ("lease_seconds", 60)):
+                if data["coordination"][key] == default:
+                    data["coordination"].pop(key)
         return json.dumps(data, sort_keys=True, separators=(",", ":"))
 
     def bucket(self, role):

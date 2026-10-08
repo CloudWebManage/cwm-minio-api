@@ -36,6 +36,7 @@ def test_default_keeps_versioned_lifecycle_and_original_manifest_hash(manifest_d
     assert set(s3.versioning) == {tier.m.bucket(r) for r in ("versioned", "cold", "quiet", "expiry")}
     original = tier.m.model_dump()
     original["tier"].pop("bucket_versioning")
+    original["tier"].pop("quiet_objects")
     digest = hashlib.sha256(json.dumps(original, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     assert tier.m.digest == digest
     original["tier"]["bucket_versioning"] = False

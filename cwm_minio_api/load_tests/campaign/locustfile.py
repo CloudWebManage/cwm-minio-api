@@ -44,7 +44,7 @@ def initialize(environment, **kwargs):
         coord = Coordinator(manifest, state, runtime["endpoint"], data["redis_url"], incarnation=data["incarnation"])
         worker = os.environ["CWM_CAMPAIGN_WORKER_ID"]
         coord.join(worker, os.environ["CWM_CAMPAIGN_SESSION"])
-        stage = coord.redis.hget(coord.session, "stage")
+        stage = coord.retry(lambda:coord.redis.hget(coord.session, "stage"))
     else:
         manifest = load_manifest(os.environ["CWM_CAMPAIGN_MANIFEST"])
         state = State(manifest, create=False)
@@ -57,6 +57,10 @@ def initialize(environment, **kwargs):
             coord.token = os.environ["CWM_CAMPAIGN_TOKEN"]
             if not isinstance(environment.runner, MasterRunner):
                 coord.join(worker, coord.session)
+    if manifest.coordination:
+        import locust.runners as runners
+        runners.HEARTBEAT_LIVENESS = max(3, int(manifest.coordination.heartbeat_timeout_seconds / runners.HEARTBEAT_INTERVAL))
+        runners.MASTER_HEARTBEAT_TIMEOUT = manifest.coordination.heartbeat_timeout_seconds
     lock = state.lock("writer")
     if not bundle and not isinstance(environment.runner, MasterRunner):
         lock.__enter__()
@@ -107,10 +111,10 @@ def started(environment, **kwargs):
     ctx["admit_until"] = time.time() + ctx["m"].limits.duration_seconds
     coord = ctx.get("coord")
     if coord and (isinstance(environment.runner, MasterRunner) or os.getenv("CWM_CAMPAIGN_ROLE") == "coordinated-local"):
-        if coord.redis.hlen(coord.session + ":workers") != ctx["m"].coordination.expected_workers:
+        if coord.retry(lambda:coord.redis.hlen(coord.session + ":workers")) != ctx["m"].coordination.expected_workers:
             fail(environment, "worker rendezvous count mismatch")
             return
-        coord.redis.hset(coord.session, mapping={"phase": "running", "deadline": coord.now() + ctx["m"].limits.duration_seconds + ctx["m"].limits.drain_seconds + 5})
+        coord.retry(lambda:coord.redis.hset(coord.session, mapping={"phase": "running", "deadline": coord.now() + ctx["m"].limits.duration_seconds + ctx["m"].limits.drain_seconds + 5}))
     if not coord:
         ctx["store"].budget.deadline = ctx["admit_until"] + ctx["m"].limits.drain_seconds + 1
 
@@ -175,7 +179,7 @@ class CampaignUser(User):
 def finished(environment, **kwargs):
     master = isinstance(environment.runner, MasterRunner)
     if master and ctx.get("coord"):
-        failures = ctx["coord"].redis.hvals(ctx["coord"].session + ":failures")
+        failures = ctx["coord"].retry(lambda:ctx["coord"].redis.hvals(ctx["coord"].session + ":failures"))
         if failures:
             ctx["failure"] = "worker failure"
             ctx["exhausted"] = "BudgetExhausted" in failures
@@ -195,7 +199,7 @@ def finished(environment, **kwargs):
         outcome.update(status="inconclusive", reason="global budget exhausted before workload completed")
     private_json(Path(os.environ["CWM_CAMPAIGN_OUTCOME"]), outcome)
     if ctx.get("coord") and not master:
-        ctx["coord"].redis.hset(ctx["coord"].session + ":outcomes", ctx["worker"], json.dumps(outcome))
+        ctx["coord"].retry(lambda:ctx["coord"].redis.hset(ctx["coord"].session + ":outcomes", ctx["worker"], json.dumps(outcome)))
     if outcome["status"] != "passed":
         environment.process_exit_code = 1
     if "lock" in ctx:

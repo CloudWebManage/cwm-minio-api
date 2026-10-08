@@ -1,4 +1,13 @@
 """python -m cwm_minio_api.load_tests.campaign --help"""
+import sys
+
+# Heating workers need cooperative I/O before importing SDK/socket consumers.
+if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] == "worker" and any(
+    arg == "--heating-session" or arg.startswith("--heating-session=") for arg in sys.argv[2:]
+):
+    from gevent.monkey import patch_all
+    patch_all()
+
 import argparse
 import fcntl
 import hashlib
@@ -18,6 +27,7 @@ def parser():
     root = argparse.ArgumentParser(description="Bounded, resumable S3/CWM campaigns. Runtime state and credentials stay outside Git.")
     commands = root.add_subparsers(dest="command", required=True)
     commands.add_parser("schema", help="Print the strict v1 manifest JSON Schema (offline).")
+    commands.add_parser("capabilities", help="Print worker protocol capabilities without state or network I/O.")
     check = commands.add_parser("check-report", help="Offline check of a standalone XLSX and same-stem JSON companion before paired sharing.")
     check.add_argument("xlsx", metavar="XLSX", type=Path, help="Validate report ID, canonical JSON fingerprint, workbook SHA256 and ZIP integrity; mismatch/missing files exit 2.")
     descriptions = {
@@ -76,6 +86,9 @@ def parser():
     worker.add_argument("--worker-id", required=True, help="Unique stable alphanumeric/hyphen worker identity.")
     worker.add_argument("--state-dir", required=True, help="Absolute worker-local runtime root outside Git; each attempt has its own directory.")
     worker.add_argument("--master-host", required=True)
+    worker.add_argument("--heating-session", help="Join this exact distributed heating session instead of Locust traffic.")
+    worker.add_argument("--deadline-at", type=float, help="Fixed absolute UTC job deadline; never extended on SSH reconnect.")
+    worker.add_argument("--expected-session", help="Refuse joining any traffic session other than this exact master attempt.")
     worker.add_argument("--master-port", type=int, default=5557)
     return root
 
@@ -144,6 +157,9 @@ def run_stage(name, control, runtime_data, coordinator, args):
         elif name == "observe":
             tier = stages.TierStages(store)
             details = tier.observe() if args.until == "snapshot" else getattr(tier, args.until)()
+        elif name == "heat" and args.master:
+            from .heating import master_heat
+            details = master_heat(store, coordinator)
         else:
             details = getattr(stages.TierStages(store), name)()
         result.update(status="passed", details=details)
@@ -174,6 +190,14 @@ def run_stage(name, control, runtime_data, coordinator, args):
 
 
 def execute(args):
+    if args.command == "capabilities":
+        root = Path(__file__).resolve().parents[3]
+        source = hashlib.sha256()
+        for path in sorted([root / "pyproject.toml", root / "uv.lock", *(root / "cwm_minio_api").rglob("*.py")]):
+            source.update(str(path.relative_to(root)).encode()); source.update(path.read_bytes())
+        return {"worker_protocol": 1, "bundle_schema": 2, "fixed_worker_deadline": True,
+                "distributed_heating": "exact-version-parallel", "implicit_heating_replay": False,
+                "sources_sha256": source.hexdigest()}
     if args.command == "schema":
         return Manifest.model_json_schema()
     if args.command == "check-report":
@@ -187,7 +211,19 @@ def execute(args):
         from .distributed import load_bundle, worker_id
         from .traffic import worker
         manifest, data = load_bundle(args.bundle)
-        return worker(args.bundle, manifest, data, worker_id(args.worker_id), args.state_dir, args.master_host, args.master_port)
+        def run_worker():
+            if args.heating_session:
+                from .heating import worker_heat
+                return worker_heat(args.bundle, manifest, data, worker_id(args.worker_id), args.state_dir, args.heating_session)
+            return worker(args.bundle, manifest, data, worker_id(args.worker_id), args.state_dir, args.master_host, args.master_port, expected_session=args.expected_session)
+        if args.deadline_at is not None:
+            import math
+            from .timing import deadline
+            if not math.isfinite(args.deadline_at):
+                raise CampaignError("invalid absolute worker deadline")
+            with deadline(args.deadline_at - time.time(), error=Aborted("fixed worker deadline reached")):
+                return run_worker()
+        return run_worker()
     manifest = load_manifest(args.manifest)
     if args.command == "report":
         from .stakeholder import report_workbook
@@ -203,7 +239,8 @@ def execute(args):
     try:
         if args.command == "status":
             return {"run_id": manifest.run_id, "prepared": state.get("prepared", False), "cleaned": state.get("cleaned", False),
-                    "stopped": state.stopped(), "stages": state.get("stages", {}), "budget": state.get("budget"), "archive": state.get("archive")}
+                    "stopped": state.stopped(), "stages": state.get("stages", {}), "budget": state.get("budget"), "archive": state.get("archive"),
+                    "session": state.get("session"), "session_stage": state.get("session_stage")}
         if args.command == "stop":
             private_json(state.path / "STOP", {"at": time.time()})
             if manifest.coordination:

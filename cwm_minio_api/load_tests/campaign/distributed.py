@@ -1,5 +1,7 @@
 """Dedicated Redis coordination. Never FLUSHDB; every mutation is namespace-scoped."""
 import json
+import ssl
+from contextvars import ContextVar
 import os
 import re
 import threading
@@ -9,9 +11,10 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from redis import Redis
+from redis.exceptions import AuthenticationError, ConnectionError as RedisConnectionError, TimeoutError as RedisTimeoutError
 
 from .budget import BudgetExhausted
-from .config import Aborted, CampaignError, Manifest, check_path, env
+from .config import Aborted, CampaignError, Manifest, TransientFailure, check_path, env
 from .state import private_json
 
 
@@ -19,12 +22,38 @@ LEASE_SECONDS = 60
 HEARTBEAT_SECONDS = 15
 
 
-def check_health(master_at, worker_times, expected, deadline, now):
+_RETRY_DEADLINE = ContextVar('campaign_redis_retry_deadline', default=None)
+
+
+def redis_retry(operation, seconds, *, clock=time.monotonic, sleep=time.sleep):
+    """Use only for reads or explicitly idempotent, identity-bound mutations."""
+    end=min(clock()+seconds,_RETRY_DEADLINE.get() or float('inf'))
+    token=_RETRY_DEADLINE.set(end)
+    delay=.1
+    try:
+        while True:
+            try:
+                return operation()
+            except (RedisConnectionError,RedisTimeoutError) as exc:
+                if isinstance(exc,AuthenticationError):raise
+                cause=exc
+                while cause:
+                    if isinstance(cause,ssl.SSLError):raise exc
+                    cause=cause.__cause__ or cause.__context__
+                remaining=end-clock()
+                if remaining<=0:
+                    raise TransientFailure('coordination transport recovery exhausted; original identity retained') from None
+                sleep(min(delay,remaining));delay=min(1,delay*2)
+    finally:
+        _RETRY_DEADLINE.reset(token)
+
+
+def check_health(master_at, worker_times, expected, deadline, now, heartbeat_seconds=HEARTBEAT_SECONDS):
     if now >= deadline:
         raise Aborted("distributed hard deadline reached")
-    if now - master_at > HEARTBEAT_SECONDS:
+    if now - master_at > heartbeat_seconds:
         raise Aborted("master heartbeat missing")
-    if len(worker_times) != expected or any(now - ts > HEARTBEAT_SECONDS for ts in worker_times):
+    if len(worker_times) != expected or any(now - ts > heartbeat_seconds for ts in worker_times):
         raise Aborted("expected worker heartbeat missing or unexpected worker count")
 
 
@@ -60,13 +89,17 @@ if redis.call('EXISTS', KEYS[7]) == 1 then return {-2, 0} end
 local t = redis.call('TIME')
 local now = tonumber(t[1]) + tonumber(t[2])/1000000
 redis.call('ZREMRANGEBYSCORE', KEYS[8], '-inf', now - 60)
+local previously = redis.call('HEXISTS', KEYS[1], 'admission:'..ARGV[9]) == 1
 local count = tonumber(redis.call('HGET', KEYS[1], 'requests'))
 local bytes = tonumber(redis.call('HGET', KEYS[1], 'bytes'))
-if count >= tonumber(ARGV[4]) or bytes + tonumber(ARGV[5]) > tonumber(ARGV[6]) then return {-3, 0} end
+if not previously and (count >= tonumber(ARGV[4]) or bytes + tonumber(ARGV[5]) > tonumber(ARGV[6])) then return {-3, 0} end
 local next = tonumber(redis.call('HGET', KEYS[1], 'next'))
-if redis.call('ZCARD', KEYS[8]) >= tonumber(ARGV[7]) then return {0, 10} end
+if not redis.call('ZSCORE', KEYS[8], ARGV[9]) and redis.call('ZCARD', KEYS[8]) >= tonumber(ARGV[7]) then return {0, 10} end
 if next > now then return {0, math.ceil((next-now)*1000)} end
-redis.call('HSET', KEYS[1], 'requests', count+1, 'bytes', bytes+tonumber(ARGV[5]), 'next', now+1/tonumber(ARGV[8]))
+if not previously then
+  redis.call('HSET', KEYS[1], 'admission:'..ARGV[9], 1, 'requests', count+1, 'bytes', bytes+tonumber(ARGV[5]))
+end
+redis.call('HSET', KEYS[1], 'next', now+1/tonumber(ARGV[8]))
 redis.call('ZADD', KEYS[8], now, ARGV[9])
 return {1, 0}
 """
@@ -88,17 +121,61 @@ redis.call('HSET', KEYS[4], ARGV[3], ARGV[4]); redis.call('HINCRBY', KEYS[1], 'c
 """
 TICKET = INTEGRITY + """
 if not valid() then return -5 end
+local prior = redis.call('HGET', KEYS[1], 'allocation:'..ARGV[5])
+if prior then return tonumber(prior) end
 local field = 'sequence:'..ARGV[3]
 local ticket = tonumber(redis.call('HGET', KEYS[1], field))
 if ticket >= tonumber(ARGV[4]) then return -1 end
 redis.call('HSET', KEYS[5], ARGV[3]..':'..ticket, 'allocated')
-redis.call('HINCRBY', KEYS[1], field, 1); return ticket
+redis.call('HINCRBY', KEYS[1], field, 1)
+redis.call('HSET', KEYS[1], 'allocation:'..ARGV[5], ticket); return ticket
 """
 APPEND = INTEGRITY + """
 if not valid() then return -5 end
+if redis.call('HEXISTS', KEYS[1], 'publication:'..ARGV[6]) == 1 then return 1 end
 local index = tonumber(ARGV[3])
 redis.call('RPUSH', KEYS[index], ARGV[4])
-redis.call('HINCRBY', KEYS[1], ARGV[5], 1); return 1
+redis.call('HINCRBY', KEYS[1], ARGV[5], 1)
+redis.call('HSET', KEYS[1], 'publication:'..ARGV[6], 1); return 1
+"""
+
+
+HEAT_TAKE = INTEGRITY + """
+if not valid() then return -5 end
+if redis.call('GET', KEYS[6]) ~= ARGV[3] or redis.call('EXISTS', KEYS[7]) == 1 then return -6 end
+local prior=redis.call('HGET', KEYS[9], ARGV[4])
+if prior then return prior end
+local task=redis.call('LPOP', KEYS[8])
+if task then redis.call('HSET', KEYS[9], ARGV[4], task) end
+return task
+"""
+HEAT_RECEIPT = INTEGRITY + """
+if not valid() then return -5 end
+if redis.call('GET', KEYS[6]) ~= ARGV[3] or redis.call('EXISTS', KEYS[7]) == 1 then return -6 end
+local prior=redis.call('HGET', KEYS[8], ARGV[4])
+if prior then return prior == ARGV[5] and 1 or 0 end
+redis.call('HSET', KEYS[8], ARGV[4], ARGV[5]);return 1
+"""
+
+
+HEAT_INIT = INTEGRITY + """
+if not valid() then return -5 end
+if redis.call('GET', KEYS[6]) ~= ARGV[3] or redis.call('EXISTS', KEYS[7]) == 1 then return -6 end
+local prior=redis.call('HGET', KEYS[8], 'heat_initialization')
+if prior then return prior == ARGV[4] and 1 or 0 end
+if redis.call('HGET', KEYS[8], 'phase') ~= 'rendezvous' then return 0 end
+redis.call('HSET', KEYS[8], 'heat_initialization', ARGV[4], 'heat_status', 'pending', 'heat_started', ARGV[5], 'deadline', ARGV[6])
+for i=7,#ARGV do redis.call('RPUSH', KEYS[9], ARGV[i]) end
+return 1
+"""
+JOIN = INTEGRITY + """
+if not valid() then return -5 end
+if redis.call('GET', KEYS[6]) ~= ARGV[3] or redis.call('EXISTS', KEYS[7]) == 1 then return -6 end
+local prior=redis.call('HGET', KEYS[10], ARGV[4])
+if prior then return prior == ARGV[5] and 1 or 0 end
+if redis.call('HEXISTS', KEYS[9], ARGV[4]) == 1 then return 0 end
+redis.call('HSET', KEYS[9], ARGV[4], ARGV[6])
+redis.call('HSET', KEYS[10], ARGV[4], ARGV[5]);return 1
 """
 
 
@@ -106,6 +183,9 @@ class Coordinator:
     def __init__(self, manifest, state, endpoint, url=None, *, initialize=False, incarnation=None):
         import hashlib
         self.m, self.state = manifest, state
+        self.retry_seconds=manifest.coordination.transport_timeout_seconds
+        self.heartbeat_seconds=manifest.coordination.heartbeat_timeout_seconds
+        self.lease_seconds=manifest.coordination.lease_seconds
         self.redis = Redis.from_url(url or env(manifest.coordination.redis_url_env), decode_responses=True,
                                    socket_connect_timeout=3, socket_timeout=3)
         self.prefix = f"cwm_objstore_loadtest:run:{manifest.run_id}"
@@ -133,19 +213,27 @@ class Coordinator:
             raise CampaignError("Redis run integrity lost; reinitialization is forbidden")
         return result
 
+    def retry(self, operation):
+        return redis_retry(operation,self.retry_seconds)
+
     def integrity(self):
         try:
-            valid = self.evaluate(INTEGRITY + "return valid() and 1 or 0")
+            valid = self.retry(lambda:self.evaluate(INTEGRITY + "return valid() and 1 or 0"))
+        except TransientFailure:
+            raise
         except Exception:
             raise CampaignError("Redis run integrity unavailable") from None
         if valid != 1:
             raise CampaignError("Redis incarnation/quota/journal/sequence integrity lost")
 
     def now(self):
-        seconds, micros = self.redis.time()
+        seconds, micros = self.retry(self.redis.time)
         return seconds + micros / 1000000
 
     def guard(self):
+        return self.retry(self._guard)
+
+    def _guard(self):
         self.integrity()
         if self.lost or self.redis.get(self.target) != self.token:
             raise Aborted("target lease lost")
@@ -164,8 +252,8 @@ class Coordinator:
             if data.get("phase") == "running":
                 check_health(float(data.get("heartbeat", 0)),
                              [float(t) for t in self.redis.hvals(self.session + ":workers")],
-                             self.m.coordination.expected_workers, float(data["deadline"]), now)
-            elif now > float(data["deadline"]) or now - float(data.get("heartbeat", 0)) > HEARTBEAT_SECONDS:
+                             self.m.coordination.expected_workers, float(data["deadline"]), now,self.heartbeat_seconds)
+            elif now > float(data["deadline"]) or now - float(data.get("heartbeat", 0)) > self.heartbeat_seconds:
                 raise Aborted("master rendezvous timeout or heartbeat missing")
 
     def check(self):
@@ -174,20 +262,29 @@ class Coordinator:
     @contextmanager
     def lease(self):
         self.integrity()
-        self.redis.zremrangebyscore(self.prefix + ":inflight", "-inf", self.now() - LEASE_SECONDS)
+        self.redis.zremrangebyscore(self.prefix + ":inflight", "-inf", self.now() - self.lease_seconds)
         if self.redis.zcard(self.prefix + ":inflight"):
             raise CampaignError("in-flight writers still hold the target lease safety window")
-        if not self.redis.set(self.target, self.token, nx=True, ex=LEASE_SECONDS):
+        if not self.redis.set(self.target, self.token, nx=True, ex=self.lease_seconds):
             raise CampaignError("target lease is held by another controller")
         done = threading.Event()
+        valid_until=time.monotonic()+self.lease_seconds
         def heartbeat():
+            nonlocal valid_until
             while not done.wait(2):
                 try:
-                    if not self.redis.eval(RENEW, 1, self.target, self.token, LEASE_SECONDS):
+                    if not self.redis.eval(RENEW, 1, self.target, self.token, self.lease_seconds):
                         self.lost = True
                         return
+                    valid_until=time.monotonic()+self.lease_seconds
                     if self.session:
                         self.redis.hset(self.session, "heartbeat", self.now())
+                except (RedisConnectionError,RedisTimeoutError,TransientFailure) as exc:
+                    if isinstance(exc,AuthenticationError) or time.monotonic()>=valid_until:
+                        self.lost=True;return
+                    # A failed renewal reply does not prove token loss. Keep
+                    # trying within the known lease; never reacquire a lease.
+                    continue
                 except Exception:
                     self.lost = True
                     return
@@ -198,7 +295,7 @@ class Coordinator:
         finally:
             done.set()
             thread.join(timeout=5)
-            self.redis.eval(RELEASE, 1, self.target, self.token)
+            self.retry(lambda:self.redis.eval(RELEASE, 1, self.target, self.token))
 
     @contextmanager
     def request(self, size=0):
@@ -206,8 +303,8 @@ class Coordinator:
         limits = self.m.limits
         while True:
             self.guard()
-            status, milliseconds = self.evaluate(ADMIT, self.token, limits.requests, size, limits.bytes,
-                limits.inflight, limits.rps, ticket, extra_keys=(self.target, self.prefix + ":stop", self.prefix + ":inflight"))
+            status, milliseconds = self.retry(lambda:self.evaluate(ADMIT, self.token, limits.requests, size, limits.bytes,
+                limits.inflight, limits.rps, ticket, extra_keys=(self.target, self.prefix + ":stop", self.prefix + ":inflight")))
             if status == 1:
                 break
             if status == -3:
@@ -218,42 +315,47 @@ class Coordinator:
         try:
             yield
         finally:
-            self.redis.zrem(self.prefix + ":inflight", ticket)
+            self.retry(lambda:self.redis.zrem(self.prefix + ":inflight", ticket))
 
     def usage(self):
         self.integrity()
-        data = self.redis.hgetall(self.keys[0])
+        data = self.retry(lambda:self.redis.hgetall(self.keys[0]))
         return {"requests": int(data["requests"]), "bytes": int(data["bytes"]), "next": float(data["next"])}
 
     def claim(self, key, worker):
-        return bool(self.evaluate(CLAIM, key, worker))
+        return bool(self.retry(lambda:self.evaluate(CLAIM, key, worker)))
 
     def begin(self, stage):
         self.session = self.prefix + ":session:" + uuid.uuid4().hex
         now = self.now()
-        self.redis.hset(self.session, mapping={"stage": stage, "phase": "rendezvous", "token": self.token,
-                        "heartbeat": now, "deadline": now + self.m.coordination.rendezvous_seconds + self.m.limits.duration_seconds + 30})
-        self.redis.set(self.prefix + ":active", self.session)
+        self.retry(lambda:self.redis.hset(self.session, mapping={"stage": stage, "phase": "rendezvous", "token": self.token,
+                        "heartbeat": now, "deadline": now + self.m.coordination.rendezvous_seconds + self.m.limits.duration_seconds + 30}))
+        self.retry(lambda:self.redis.set(self.prefix + ":active", self.session))
         self.state.set("session", self.session)
+        self.state.set("session_stage", stage)
         return self.session
 
     def join(self, worker, session):
         self.session = session
-        data = self.redis.hgetall(session)
+        data = self.retry(lambda:self.redis.hgetall(session))
         self.token = data.get("token", "")
         self.guard()
-        if not self.redis.hsetnx(session + ":workers", worker, self.now()):
-            raise CampaignError("duplicate worker identity")
+        joining=uuid.uuid4().hex; now=self.now()
+        result=self.retry(lambda:self.evaluate(JOIN,self.token,worker,joining,now,
+            extra_keys=(self.target,self.prefix+':stop',session,session+':workers',session+':joins')))
+        if result == -6:raise Aborted('worker join target lease lost or stop requested')
+        if result != 1:raise CampaignError('duplicate worker identity')
 
     def heartbeat_worker(self, worker):
-        self.redis.hset(self.session + ":workers", worker, self.now())
+        self.retry(lambda:self.redis.hset(self.session + ":workers", worker, self.now()))
         self.guard()
 
     def next_ticket(self, stage):
         self.guard()
         if stage not in ("baseline-plain", "baseline-versioned", "mixed"):
             raise CampaignError("invalid traffic stage")
-        return self.evaluate(TICKET, stage, self.m.dataset.objects)
+        allocation=uuid.uuid4().hex
+        return self.retry(lambda:self.evaluate(TICKET, stage, self.m.dataset.objects,allocation))
 
     def ticket_positions(self):
         """Atomic read of allocated prefixes, including allocation-before-event gaps."""
@@ -267,13 +369,35 @@ class Coordinator:
         except (TypeError, ValueError):
             raise CampaignError("invalid Redis ticket positions") from None
 
+    def heat_initialize(self,tasks,started,end):
+        initialization=uuid.uuid4().hex
+        result=self.retry(lambda:self.evaluate(HEAT_INIT,self.token,initialization,started,end,*tasks,
+            extra_keys=(self.target,self.prefix+':stop',self.session,self.session+':heat-items')))
+        if result == -6:raise Aborted('heating initialization target lease lost or stop requested')
+        if result != 1:raise CampaignError('heating initialization already recorded; do not replay')
+
+    def heat_take(self):
+        allocation=uuid.uuid4().hex
+        result=self.retry(lambda:self.evaluate(HEAT_TAKE,self.token,allocation,
+            extra_keys=(self.target,self.prefix+":stop",self.session+":heat-items",self.session+":heat-claims")))
+        if result == -6:raise Aborted("heating target lease lost or stop requested")
+        return result
+
+    def heat_receipt(self,op,value):
+        result=self.retry(lambda:self.evaluate(HEAT_RECEIPT,self.token,op,value,
+            extra_keys=(self.target,self.prefix+":stop",self.session+":heat-receipts")))
+        if result == -6:raise Aborted("heating target lease lost or stop requested")
+        if result != 1:raise CampaignError("conflicting distributed heating receipt")
+
     def publish_event(self, event):
-        if self.redis.get(self.target) != self.token:
+        if self.retry(lambda:self.redis.get(self.target)) != self.token:
             raise Aborted("journal target lease lost")
-        self.evaluate(APPEND, 2, json.dumps(event), "event_count")
+        publication=uuid.uuid4().hex;value=json.dumps(event)
+        self.retry(lambda:self.evaluate(APPEND, 2, value, "event_count",publication))
 
     def publish_metric(self, values):
-        self.evaluate(APPEND, 3, json.dumps(values), "metric_count")
+        publication=uuid.uuid4().hex;value=json.dumps(values)
+        self.retry(lambda:self.evaluate(APPEND, 3, value, "metric_count",publication))
 
     def collect(self):
         from .report import Metrics
@@ -282,7 +406,7 @@ class Coordinator:
         for kind in ("events", "metrics"):
             cursor_key = "redis_cursor:" + kind
             cursor = self.state.get(cursor_key, 1)  # Index zero is the incarnation sentinel.
-            while batch := self.redis.lrange(self.prefix + ":" + kind, cursor, cursor + 499):
+            while batch := self.retry(lambda:self.redis.lrange(self.prefix + ":" + kind, cursor, cursor + 499)):
                 for item in batch:
                     data = json.loads(item)
                     if kind == "events":
@@ -295,7 +419,7 @@ class Coordinator:
         self.state.set("budget", self.usage())
 
     def stop(self):
-        self.redis.set(self.prefix + ":stop", "1")
+        self.retry(lambda:self.redis.set(self.prefix + ":stop", "1"))
 
 
 def export_bundle(manifest, state, output):
