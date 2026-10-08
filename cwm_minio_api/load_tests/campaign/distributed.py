@@ -179,6 +179,31 @@ redis.call('HSET', KEYS[10], ARGV[4], ARGV[5]);return 1
 """
 
 
+START_TRAFFIC = INTEGRITY + """
+if not valid() then return -5 end
+if redis.call('GET', KEYS[6]) ~= ARGV[3] or redis.call('EXISTS', KEYS[7]) == 1 then return -6 end
+if redis.call('HGET', KEYS[8], 'token') ~= ARGV[3] or redis.call('HLEN', KEYS[10]) ~= 0 then return -6 end
+local phase = redis.call('HGET', KEYS[8], 'phase')
+if phase == 'running' and redis.call('HGET', KEYS[8], 'traffic_activation') == ARGV[4] then return 1 end
+if phase ~= 'rendezvous' then return -6 end
+local t = redis.call('TIME')
+local now = tonumber(t[1]) + tonumber(t[2])/1000000
+local deadline = tonumber(redis.call('HGET', KEYS[8], 'deadline'))
+local rendezvous = tonumber(redis.call('HGET', KEYS[8], 'rendezvous_deadline'))
+local heartbeat = tonumber(redis.call('HGET', KEYS[8], 'heartbeat'))
+if not deadline or not rendezvous or not heartbeat or now >= deadline or now >= rendezvous or now-heartbeat > tonumber(ARGV[8]) then return -6 end
+local workers = redis.call('HVALS', KEYS[9])
+if #workers ~= tonumber(ARGV[5]) then return -6 end
+for _,value in ipairs(workers) do
+  local at = tonumber(value)
+  if not at or at > now or now-at > tonumber(ARGV[8]) then return -6 end
+end
+redis.call('HSET', KEYS[8], 'phase', 'running', 'traffic_activation', ARGV[4],
+           'deadline', math.min(deadline, now+tonumber(ARGV[6])+tonumber(ARGV[7])+5))
+return 1
+"""
+
+
 class Coordinator:
     def __init__(self, manifest, state, endpoint, url=None, *, initialize=False, incarnation=None):
         import hashlib
@@ -329,11 +354,46 @@ class Coordinator:
         self.session = self.prefix + ":session:" + uuid.uuid4().hex
         now = self.now()
         self.retry(lambda:self.redis.hset(self.session, mapping={"stage": stage, "phase": "rendezvous", "token": self.token,
-                        "heartbeat": now, "deadline": now + self.m.coordination.rendezvous_seconds + self.m.limits.duration_seconds + 30}))
+                        "heartbeat": now, "rendezvous_deadline": now + self.m.coordination.rendezvous_seconds,
+                        "deadline": now + self.m.coordination.rendezvous_seconds + self.m.limits.duration_seconds + 30}))
         self.retry(lambda:self.redis.set(self.prefix + ":active", self.session))
         self.state.set("session", self.session)
         self.state.set("session_stage", stage)
         return self.session
+
+    def await_workers(self):
+        """Wait for application joins, not just Locust transport connections."""
+        def wait():
+            data = self.retry(lambda: self.redis.hgetall(self.session))
+            deadline = min(float(data["deadline"]),
+                           float(data.get("rendezvous_deadline", self.now() + self.m.coordination.rendezvous_seconds)))
+            while True:
+                self.guard()
+                now = self.now()
+                if now >= deadline:
+                    raise Aborted("worker application rendezvous timeout")
+                workers = self.retry(lambda: self.redis.hgetall(self.session + ":workers"))
+                now = self.now()
+                if now >= deadline:
+                    raise Aborted("worker application rendezvous timeout")
+                if len(workers) > self.m.coordination.expected_workers:
+                    raise CampaignError("unexpected worker rendezvous count")
+                if len(workers) == self.m.coordination.expected_workers and all(
+                        0 <= now - float(at) <= self.heartbeat_seconds for at in workers.values()):
+                    return
+                time.sleep(min(0.1, deadline - now))
+        return redis_retry(wait, self.m.coordination.rendezvous_seconds)
+
+    def activate_traffic(self):
+        """Publish running atomically with fresh worker, ownership and deadline checks."""
+        activation = uuid.uuid4().hex
+        result = self.retry(lambda: self.evaluate(START_TRAFFIC, self.token, activation,
+            self.m.coordination.expected_workers, self.m.limits.duration_seconds,
+            self.m.limits.drain_seconds, self.heartbeat_seconds,
+            extra_keys=(self.target, self.prefix + ':stop', self.session,
+                        self.session + ':workers', self.session + ':failures')))
+        if result != 1:
+            raise Aborted("application readiness changed or rendezvous deadline reached")
 
     def join(self, worker, session):
         self.session = session

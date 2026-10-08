@@ -97,7 +97,7 @@ def _traffic(manifest, state, stage, coordinator, master, bind_host, port, attem
     artifacts.mkdir(parents=True, mode=0o700)
     state.register_artifacts(artifacts)
     command = locust_command(artifacts, drain_seconds=manifest.limits.drain_seconds) + ["--users", str(manifest.limits.users), "--spawn-rate", str(manifest.limits.users),
-               "--run-time", str(manifest.limits.duration_seconds)]
+               *([] if coordinator else ["--run-time", str(manifest.limits.duration_seconds)])]
     environment = {**os.environ, "CWM_CAMPAIGN_MANIFEST": str(state.path / "manifest.json"),
                    "CWM_CAMPAIGN_STAGE": stage, "CWM_CAMPAIGN_PARENT_PID": str(os.getpid()),
                    "CWM_CAMPAIGN_OUTCOME": str(artifacts / "outcome.json"), "CWM_CAMPAIGN_ATTEMPT": attempt}

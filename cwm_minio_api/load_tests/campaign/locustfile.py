@@ -28,6 +28,7 @@ ctx = {}
 
 def fail(environment, reason):
     ctx["failure"] = reason
+    ctx["accepting"] = False
     if ctx.get("coord") and not isinstance(environment.runner, MasterRunner):
         ctx["coord"].redis.hset(ctx["coord"].session + ":failures", ctx["worker"], reason)
     environment.process_exit_code = 1
@@ -43,7 +44,7 @@ def initialize(environment, **kwargs):
         runtime = data["runtime"]
         coord = Coordinator(manifest, state, runtime["endpoint"], data["redis_url"], incarnation=data["incarnation"])
         worker = os.environ["CWM_CAMPAIGN_WORKER_ID"]
-        coord.join(worker, os.environ["CWM_CAMPAIGN_SESSION"])
+        coord.session = os.environ["CWM_CAMPAIGN_SESSION"]
         stage = coord.retry(lambda:coord.redis.hget(coord.session, "stage"))
     else:
         manifest = load_manifest(os.environ["CWM_CAMPAIGN_MANIFEST"])
@@ -55,8 +56,6 @@ def initialize(environment, **kwargs):
             coord = Coordinator(manifest, state, runtime["endpoint"])
             coord.session = os.environ["CWM_CAMPAIGN_SESSION"]
             coord.token = os.environ["CWM_CAMPAIGN_TOKEN"]
-            if not isinstance(environment.runner, MasterRunner):
-                coord.join(worker, coord.session)
     if manifest.coordination:
         import locust.runners as runners
         runners.HEARTBEAT_LIVENESS = max(3, int(manifest.coordination.heartbeat_timeout_seconds / runners.HEARTBEAT_INTERVAL))
@@ -83,6 +82,8 @@ def initialize(environment, **kwargs):
     ctx.update(m=manifest, state=state, coord=coord, worker=worker, store=store, stage=stage, failure=None, exhausted=False,
                accepting=True, attempt=os.getenv("CWM_CAMPAIGN_SESSION") or os.environ["CWM_CAMPAIGN_ATTEMPT"],
                request_count=0, request_failures=0)
+    if coord and not isinstance(environment.runner, MasterRunner):
+        coord.join(worker, coord.session)
     def monitor():
         while True:
             try:
@@ -108,13 +109,26 @@ def initialize(environment, **kwargs):
 
 @events.test_start.add_listener
 def started(environment, **kwargs):
-    ctx["admit_until"] = time.time() + ctx["m"].limits.duration_seconds
     coord = ctx.get("coord")
-    if coord and (isinstance(environment.runner, MasterRunner) or os.getenv("CWM_CAMPAIGN_ROLE") == "coordinated-local"):
-        if coord.retry(lambda:coord.redis.hlen(coord.session + ":workers")) != ctx["m"].coordination.expected_workers:
-            fail(environment, "worker rendezvous count mismatch")
+    controller = coord and (isinstance(environment.runner, MasterRunner) or os.getenv("CWM_CAMPAIGN_ROLE") == "coordinated-local")
+    if controller:
+        try:
+            coord.await_workers()
+            coord.activate_traffic()
+        except Exception:
+            fail(environment, "worker application rendezvous failed; inspect coordination and worker outcomes")
             return
-        coord.retry(lambda:coord.redis.hset(coord.session, mapping={"phase": "running", "deadline": coord.now() + ctx["m"].limits.duration_seconds + ctx["m"].limits.drain_seconds + 5}))
+    elif coord:
+        try:
+            coord.guard()
+            if coord.retry(lambda: coord.redis.hget(coord.session, "phase")) != "running":
+                raise CampaignError("master has not completed application rendezvous")
+        except Exception:
+            fail(environment, "worker traffic started before application readiness")
+            return
+    ctx["admit_until"] = time.time() + ctx["m"].limits.duration_seconds
+    if controller:
+        gevent.spawn_later(ctx["m"].limits.duration_seconds, environment.runner.quit)
     if not coord:
         ctx["store"].budget.deadline = ctx["admit_until"] + ctx["m"].limits.drain_seconds + 1
 
