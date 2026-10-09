@@ -52,16 +52,19 @@ class ObjectStore:
         self.stage = "control"
         self.io_timeout = manifest.limits.request_timeout_seconds
         self.ignore_stop = False
+        self.recovered_read_errors = 0
 
     def check_stop(self):
         if not self.ignore_stop and self.state.stopped():
             raise Aborted("stop requested")
 
     def call(self, operation, *, size=0, expected=(), validate=None, before=None, body_factory=None, **kwargs):
-        # Controller GETs may trigger heat/restore: count every real attempt and
-        # validate the full body again. Measured traffic keeps single attempts.
-        controller_get = operation == "get_object" and self.stage in {"seed", "versions", "heat", "restore", "renew", "verify"}
-        safe = (operation in SAFE_READS or controller_get) and before is None and body_factory is None
+        # Each safe read attempt is admitted and measured independently. GETs
+        # consume and validate a fresh body; writes never enter this retry loop.
+        safe_get = operation == "get_object" and self.stage in {
+            "seed", "versions", "heat", "restore", "renew", "verify",
+            "baseline-plain", "baseline-versioned", "mixed"}
+        safe = (operation in SAFE_READS or safe_get) and before is None and body_factory is None
         if not safe:
             return self._call_once(operation, size=size, expected=expected, validate=validate,
                                    before=before, body_factory=body_factory, **kwargs)
@@ -69,8 +72,10 @@ class ObjectStore:
         with deadline(120, self.check_stop, unavailable):
             for attempt in range(5):
                 try:
-                    return self._call_once(operation, size=size, expected=expected, validate=validate,
-                                           timeout=self.io_timeout if controller_get else max(30, self.io_timeout), retryable=True, **kwargs)
+                    result = self._call_once(operation, size=size, expected=expected, validate=validate,
+                                           timeout=self.io_timeout if safe_get else max(30, self.io_timeout), retryable=True, **kwargs)
+                    self.recovered_read_errors += attempt
+                    return result
                 except TransientFailure as exc:
                     if attempt == 4:
                         raise TransientFailure(f"{exc}; read recovery exhausted") from None
@@ -222,9 +227,7 @@ class ObjectStore:
                     raise CampaignError("GET version identity mismatch")
                 while chunk := body.read(1024 * 1024):
                     if time.monotonic() > body_end:
-                        if self.stage in {"seed", "versions", "heat", "restore", "renew", "verify"}:
-                            raise TransientFailure("full-body read deadline exceeded")
-                        raise CampaignError("full-body read deadline exceeded")
+                        raise TransientFailure("full-body read deadline exceeded")
                     digest.update(chunk)
                     total += len(chunk)
             finally:

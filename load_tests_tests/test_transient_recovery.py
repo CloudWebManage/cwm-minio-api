@@ -134,7 +134,7 @@ def test_renewal_keeps_transport_gap_and_requires_real_before_and_after(manifest
     assert any(row['value'].get('state')=='unavailable' for row in tier.state.observations(op=rec['op']))
 
 
-def test_controller_get_retries_with_fresh_body_but_traffic_get_does_not(manifest_data,monkeypatch):
+def test_controller_and_traffic_get_retry_with_fresh_body(manifest_data,monkeypatch):
     from cwm_minio_api.load_tests.campaign import s3 as module
     monkeypatch.setattr(module,'sleep_checked',lambda seconds,check:check())
     m=Manifest.model_validate(manifest_data);state=State(m);s3=MemoryS3()
@@ -148,8 +148,8 @@ def test_controller_get_retries_with_fresh_body_but_traffic_get_does_not(manifes
     store.get(rec)
     assert len(calls)==2
     calls.clear();store.stage='baseline-plain'
-    with pytest.raises(CampaignError):store.get(rec)
-    assert calls==[1]
+    store.get(rec)
+    assert len(calls)==2
 
 
 def test_real_metadata_response_slower_than_old_socket_timeout_succeeds(manifest_data):
@@ -169,3 +169,37 @@ def test_real_metadata_response_slower_than_old_socket_timeout_succeeds(manifest
         ObjectStore(m,State(m),sdk).call('head_bucket',Bucket='owned')
         assert calls==[1]
     finally:sdk.close();server.shutdown();server.server_close();thread.join(timeout=5)
+
+
+@pytest.mark.parametrize("stage", ["baseline-plain", "baseline-versioned", "mixed"])
+def test_traffic_retry_keeps_physical_errors_and_budget(manifest_data, monkeypatch, stage):
+    from cwm_minio_api.load_tests.campaign import s3 as module
+    monkeypatch.setattr(module, "sleep_checked", lambda seconds, check: check())
+    m=Manifest.model_validate(manifest_data); state=State(m); sdk=MemoryS3()
+    sdk.create_bucket(Bucket="owned")
+    store=ObjectStore(m,state,sdk,budget=LocalBudget(m,state),metric=Metrics(state))
+    rec=store.put("owned","k",0,128); store.stage=stage; get=sdk.get_object; calls=[]
+    def flaky(**kwargs):
+        calls.append(1)
+        if len(calls)==1: raise ReadTimeoutError(endpoint_url="private")
+        return get(**kwargs)
+    sdk.get_object=flaky; store.get(rec)
+    assert len(calls)==2 and state.get("budget")["requests"]==3
+    assert state.db.execute("select error from measurements where stage=?",(stage,)).fetchall()==[("ReadTimeoutError",),("",)]
+
+
+@pytest.mark.parametrize("failure", ["auth", "checksum", "exhausted"])
+def test_traffic_get_fatal_and_exhausted_reads_remain_failures(manifest_data, monkeypatch, failure):
+    from cwm_minio_api.load_tests.campaign import s3 as module
+    from cwm_minio_api.load_tests.campaign.config import TransientFailure
+    monkeypatch.setattr(module, "sleep_checked", lambda seconds, check: check())
+    m=Manifest.model_validate(manifest_data); state=State(m); sdk=MemoryS3();sdk.create_bucket(Bucket="owned")
+    store=ObjectStore(m,state,sdk);rec=store.put("owned","k",0,128);store.stage="mixed";get=sdk.get_object;calls=[]
+    def broken(**kwargs):
+        calls.append(1)
+        if failure=="auth":raise error("AccessDenied",403)
+        if failure=="exhausted":raise ReadTimeoutError(endpoint_url="private")
+        sdk.corrupt=True;return get(**kwargs)
+    sdk.get_object=broken
+    with pytest.raises(TransientFailure if failure=="exhausted" else CampaignError):store.get(rec)
+    assert len(calls)==(5 if failure=="exhausted" else 1)

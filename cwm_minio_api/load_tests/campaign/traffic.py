@@ -198,3 +198,91 @@ def worker(bundle, manifest, data, worker, state_dir, master_host, master_port, 
     supervise(command, environment, state, time.time() + manifest.coordination.rendezvous_seconds + manifest.limits.duration_seconds + manifest.limits.drain_seconds + 25,
               secrets=(data["runtime"]["access_key"], data["runtime"]["secret_key"], data["redis_url"]))
     return {"worker": worker, "artifacts": str(artifacts)}
+
+
+def _sequence_rows(state, stage):
+    rows = [json.loads(v) for (v,) in state.db.execute(
+        "SELECT value FROM sequences WHERE json_extract(value,'$.stage')=?", (stage,))]
+    tickets = [r.get("ticket") for r in rows]
+    if any(type(t) is not int or t < 0 for t in tickets) or len(tickets) != len(set(tickets)):
+        raise CampaignError("invalid or duplicate sequence ticket provenance")
+    return rows
+
+
+def recover_interrupted(store, stage):
+    """Controller resumes exact acknowledged mixed mutations under its lease.
+
+    Original sequence receipts remain untouched. Completed ticket keys are never
+    replayed; unresolved write intents are handled by the existing reconciler.
+    """
+    rows = _sequence_rows(store.state, stage)
+    if any(r["status"] not in ("sequence-completed", "sequence-interrupted") for r in rows):
+        raise CampaignError("nonterminal sequence cannot be recovered")
+    interrupted = [r for r in rows if r["status"] == "sequence-interrupted"]
+    if interrupted and stage != "mixed":
+        raise CampaignError("only audited mixed checkpoint recovery is supported")
+    completed = store.state.get("traffic-recovery:" + stage, {})
+    for row in interrupted:
+        ticket = row["ticket"]
+        if ticket >= store.m.dataset.objects:
+            raise CampaignError("recovery ticket outside declared dataset")
+        old = completed.get(str(ticket))
+        if old:
+            if old.get("status") != "passed" or old.get("original_attempt") != row["attempt"]:
+                raise CampaignError("conflicting recovery provenance")
+            continue
+        store.check_stop()
+        if store.guard:
+            store.guard()
+        bucket = store.m.bucket("versioned")
+        key = f"traffic/mixed/{ticket:08d}"
+        size = store.m.dataset.sizes[(ticket + store.m.seed) % len(store.m.dataset.sizes)]
+        first = store.state.operation(store.identity("put", bucket, key, 0))
+        second = store.state.operation(store.identity("put", bucket, key, 1))
+        marker = store.state.operation(store.identity("marker", bucket, key, "mixed"))
+        if not first or first["status"] not in ("done", "deleted"):
+            raise CampaignError("interrupted sequence lacks acknowledged first PUT")
+        if any(r and r["status"] not in ("done", "deleted") for r in (second, marker)):
+            raise CampaignError("unreconciled mixed mutation")
+        if first["status"] == "deleted" and not (second and second["status"] == "done" and marker and marker["status"] == "deleted"):
+            raise CampaignError("inconsistent completed mixed mutation chain")
+        if second and second["status"] != "done":
+            raise CampaignError("mixed second generation unexpectedly deleted")
+        if first["status"] == "done":
+            store.get(first, current=second is None)
+        if second is None:
+            second = store.put(bucket, key, 1, size)
+        if marker is None:
+            store.get(first)
+            marker = store.marker(bucket, key, "mixed")
+        if marker["status"] == "done":
+            store.expect_missing(bucket, key, marker=True)
+            store.delete_version(bucket, key, marker["version_id"])
+        store.get(second, current=True)
+        if first["status"] != "deleted":
+            store.delete_version(bucket, key, first["version_id"])
+        store.head(second, current=True)
+        actual = [(r["VersionId"], r["marker"]) for r in store.versions(bucket, key) if r["Key"] == key]
+        if actual != [(second["version_id"], False)]:
+            raise CampaignError("recovered mixed final inventory mismatch")
+        completed[str(ticket)] = dict(status="passed", original_attempt=row["attempt"],
+            original_worker=row["worker"], recovered_at=time.time(), revision=store.state.revision(),
+            context=source_context(), second_version_id=second["version_id"])
+        store.state.set("traffic-recovery:" + stage, completed)
+    return completed
+
+
+def complete_coverage(manifest, state, stage):
+    rows = _sequence_rows(state, stage)
+    recovery = state.get("traffic-recovery:" + stage, {})
+    if {r["ticket"] for r in rows} != set(range(manifest.dataset.objects)):
+        raise CampaignError("declared traffic dataset coverage is incomplete")
+    recovered = 0
+    for row in rows:
+        if row["status"] == "sequence-completed":
+            continue
+        receipt = recovery.get(str(row["ticket"]), {})
+        if row["status"] != "sequence-interrupted" or receipt.get("status") != "passed" or receipt.get("original_attempt") != row["attempt"]:
+            raise CampaignError("unrecovered interrupted sequence")
+        recovered += 1
+    return dict(dataset_sequences=len(rows), completed_sequences=len(rows)-recovered, recovered_sequences=recovered)

@@ -116,7 +116,7 @@ def run_stage(name, control, runtime_data, coordinator, args):
     from . import stages
     from .budget import LocalBudget, BudgetExhausted
     from .report import render
-    from .traffic import traffic
+    from .traffic import traffic, recover_interrupted, complete_coverage
     state, manifest, store = control.state, control.m, control.store
     results = state.get("stages", {})
     previous = results.get(name)
@@ -150,8 +150,10 @@ def run_stage(name, control, runtime_data, coordinator, args):
             details = stages.version_scenario(store, control.set_versioning)
         elif name in ("baseline-plain", "baseline-versioned", "mixed"):
             stages.reconcile_pending(store)
+            recover_interrupted(store, name)
             details = traffic(manifest, state, name, coordinator, args.master, args.bind_host, args.port)
             stages.reconcile_pending(store)
+            details["checkpoint_coverage"] = complete_coverage(manifest, state, name)
         elif name == "verify":
             details = stages.verify(store)
         elif name == "observe":

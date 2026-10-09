@@ -27,6 +27,8 @@ ctx = {}
 
 
 def fail(environment, reason):
+    if ctx.get("failure"):
+        return  # Preserve the original cause and schedule only one shutdown.
     ctx["failure"] = reason
     ctx["accepting"] = False
     if ctx.get("coord") and not isinstance(environment.runner, MasterRunner):
@@ -197,14 +199,23 @@ def finished(environment, **kwargs):
         if failures:
             ctx["failure"] = "worker failure"
             ctx["exhausted"] = "BudgetExhausted" in failures
-    failed = ctx.get("failure") or ctx.get("request_failures", 0) or environment.stats.total.num_failures or bool(environment.runner.exceptions)
+    physical_errors = ctx.get("request_failures", 0)
+    recovered_errors = getattr(ctx.get("store"), "recovered_read_errors", 0)
+    # Master interval statistics are diagnostic; exact worker receipts decide
+    # coverage and unrecovered errors. A recovered read remains a Locust error.
+    failed = ctx.get("failure") or (not master and physical_errors > recovered_errors) or bool(environment.runner.exceptions)
     outcome = {"status": "failed" if failed else "passed", "reason": ctx.get("failure") or ("request errors" if failed else "bounded workload completed"),
                "budget_exhausted": ctx.get("exhausted", False),
+               "physical_request_errors": physical_errors,
+               "recovered_read_errors": recovered_errors,
                "requests": environment.stats.total.num_requests if master else ctx.get("request_count", 0),
                "context": source_context()}
     if not master:
         outcome.update(ctx["state"].sequence_counts(ctx["stage"], ctx["attempt"]))
-        outcome.update(aggregate([outcome], allow_idle=bool(os.getenv("CWM_CAMPAIGN_BUNDLE"))))
+        coverage = aggregate([outcome], allow_idle=bool(os.getenv("CWM_CAMPAIGN_BUNDLE")))
+        if outcome["status"] != "passed":
+            coverage["reason"] = outcome["reason"]
+        outcome.update(coverage)
     if not outcome["requests"] and not master and not os.getenv("CWM_CAMPAIGN_BUNDLE"):
         outcome.update(status="failed", reason="no requests executed")
     if master and not environment.stats.total.num_requests:
@@ -214,7 +225,6 @@ def finished(environment, **kwargs):
     private_json(Path(os.environ["CWM_CAMPAIGN_OUTCOME"]), outcome)
     if ctx.get("coord") and not master:
         ctx["coord"].retry(lambda:ctx["coord"].redis.hset(ctx["coord"].session + ":outcomes", ctx["worker"], json.dumps(outcome)))
-    if outcome["status"] != "passed":
-        environment.process_exit_code = 1
+    environment.process_exit_code = 0 if outcome["status"] == "passed" else 1
     if "lock" in ctx:
         ctx["lock"].__exit__(None, None, None)
