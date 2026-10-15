@@ -112,6 +112,19 @@ def target_lock(manifest, resolved):
             fcntl.flock(stream, fcntl.LOCK_UN)
 
 
+def failure_diagnostic(exc):
+    """Record locations without exception messages, arguments or local values."""
+    from pathlib import Path
+    frames = []
+    current = exc.__traceback__
+    while current is not None:
+        code = current.tb_frame.f_code
+        frames.append(dict(file=Path(code.co_filename).name, function=code.co_name,
+                           line=current.tb_lineno))
+        current = current.tb_next
+    return dict(exception=type(exc).__name__, frames=frames[-32:])
+
+
 def run_stage(name, control, runtime_data, coordinator, args):
     from . import stages
     from .budget import LocalBudget, BudgetExhausted
@@ -177,6 +190,8 @@ def run_stage(name, control, runtime_data, coordinator, args):
     except Exception as exc:
         reason = str(exc) if isinstance(exc, CampaignError) else type(exc).__name__
         result.update(status="failed", reason=reason)
+        if not isinstance(exc, CampaignError):
+            result["failure_diagnostic"] = failure_diagnostic(exc)
         raise CampaignError(reason) from None
     finally:
         result["finished"] = time.time()

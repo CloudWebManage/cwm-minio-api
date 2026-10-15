@@ -61,5 +61,8 @@ def sleep_checked(seconds, check=lambda: None, clock=time.monotonic, sleep=time.
     end = clock() + max(0, seconds)
     while clock() < end:
         check()
-        sleep(min(0.1, end - clock()))
+        remaining = end - clock()
+        if remaining <= 0:
+            break
+        sleep(min(0.1, remaining))
     check()

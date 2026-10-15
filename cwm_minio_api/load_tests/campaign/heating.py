@@ -70,6 +70,8 @@ def master_heat(store,coord):
         for rec in tier.records(role):tier.prerequisite('cold',rec)
     tasks=[rec for role in ('cold','expiry') for rec in tier.records(role)]
     for rec in tasks:validate_task(store.m,rec)
+    if store.state.get('session_stage') == 'heat' and store.state.get('session'):
+        raise Inconclusive('retained heating session requires explicit recovery; implicit heating replay refused')
     session=coord.begin('heat');started=coord.now()
     end=started+store.m.coordination.rendezvous_seconds+store.m.limits.duration_seconds
     coord.heat_initialize([json.dumps(r) for r in tasks],started,end)

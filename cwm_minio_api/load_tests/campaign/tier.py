@@ -1,4 +1,5 @@
 """Version-bound, sampled lifecycle proofs; no GETs from observation helpers."""
+import math
 import time
 
 from .config import Aborted, CampaignError, Inconclusive, TransientFailure
@@ -152,8 +153,21 @@ class TierStages:
 
     def restore(self):
         self.start("restore")
-        pending = [(rec, self.prerequisite("heat", rec)["value"])
-                   for role in ("cold", "expiry") for rec in self.records(role)]
+        pending = []
+        for role in ("cold", "expiry"):
+            for rec in self.records(role):
+                heated = self.prerequisite("heat", rec)["value"]
+                saved = self.state.get("gate:restore:" + rec["op"])
+                if saved and saved.get("value", {}).get("status") == "passed":
+                    proof = saved["value"]
+                    times = (proof.get("observed"), saved.get("ts"), proof.get("expiry"))
+                    if (saved.get("version_id") != rec["version_id"] or saved.get("op") != rec["op"]
+                            or proof.get("gate") != "restore" or proof.get("ongoing_observed") is not True
+                            or not all(type(t) in (int, float) and math.isfinite(t) for t in times)
+                            or not times[0] <= times[1] < times[2]):
+                        raise CampaignError("invalid version-bound completed restore proof")
+                    continue  # Keep the initial lifetime anchor, including on later resumes.
+                pending.append((rec, heated))
         end = self.clock() + self.tier.timeout_seconds
         timeout = Inconclusive("metadata gate timeout; transition was not proven")
         with deadline(self.tier.timeout_seconds, self.check, timeout):
