@@ -71,7 +71,7 @@ def test_tier_cycle_uses_real_metadata_gates_and_isolated_cohorts(manifest_data,
 def test_restore_completed_without_observed_ongoing_is_inconclusive(manifest_data, monkeypatch):
     from test_review_tiers import setup
     tier, s3, clock = setup(manifest_data)
-    clock.now -= 300
+    clock.now -= 900  # Leave room for bounded read retries within this UTC hour.
     tier.cold()
     tier.heat()
     for role in ("cold", "expiry"):
@@ -83,7 +83,7 @@ def test_restore_completed_without_observed_ongoing_is_inconclusive(manifest_dat
 def test_restore_observes_overlapping_cohorts_without_serial_blind_spot(manifest_data):
     from test_review_tiers import setup
     tier, s3, clock = setup(manifest_data)
-    clock.now -= 300
+    clock.now -= 900  # Leave room for bounded read retries within this UTC hour.
     tier.cold()
     tier.heat()
     restore_started = clock()

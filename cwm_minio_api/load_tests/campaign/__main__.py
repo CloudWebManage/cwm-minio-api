@@ -23,6 +23,14 @@ from .config import Aborted, CampaignError, Inconclusive, TransientFailure, Mani
 from .state import State, private_json
 
 
+def heat_timeout_argument(value):
+    from .config import heat_timeout
+    try:
+        return heat_timeout(int(value))
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from None
+
+
 def parser():
     root = argparse.ArgumentParser(description="Bounded, resumable S3/CWM campaigns. Runtime state and credentials stay outside Git.")
     commands = root.add_subparsers(dest="command", required=True)
@@ -54,6 +62,8 @@ def parser():
             if name == "stage":
                 command.add_argument("stage", metavar="STAGE", choices=STAGES, help=", ".join(STAGES))
             command.add_argument("--resume", action="store_true", help="Clear an explicit stop and resume incomplete stages under the same immutable manifest.")
+            command.add_argument("--heat-timeout-seconds", type=heat_timeout_argument,
+                                 help="Distributed heat duration, 1..86400 seconds; defaults to manifest duration. Does not change traffic limits.")
             command.add_argument("--master", action="store_true", help="Run distributed Locust master for traffic; deterministic stages remain on controller.")
             command.add_argument("--bind-host", default="0.0.0.0", help="Locust master bind address (default 0.0.0.0).")
             command.add_argument("--port", type=int, default=5557, help="Locust master TCP port (default 5557).")
@@ -174,7 +184,7 @@ def run_stage(name, control, runtime_data, coordinator, args):
             details = tier.observe() if args.until == "snapshot" else getattr(tier, args.until)()
         elif name == "heat" and args.master:
             from .heating import master_heat
-            details = master_heat(store, coordinator)
+            details = master_heat(store, coordinator, heat_timeout_seconds=getattr(args, "heat_timeout_seconds", None))
         else:
             details = getattr(stages.TierStages(store), name)()
         result.update(status="passed", details=details)

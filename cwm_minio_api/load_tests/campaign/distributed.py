@@ -11,7 +11,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from redis import Redis
-from redis.exceptions import AuthenticationError, ConnectionError as RedisConnectionError, TimeoutError as RedisTimeoutError
+from redis.exceptions import AuthenticationError, ConnectionError as RedisConnectionError, ResponseError, TimeoutError as RedisTimeoutError
 
 from .budget import BudgetExhausted
 from .config import Aborted, CampaignError, Manifest, TransientFailure, check_path, env
@@ -73,6 +73,41 @@ local function valid()
   return redis.call('HLEN', KEYS[5]) == tickets+1
 end
 """
+# A guard is one server-time snapshot; no client-side gaps between health checks.
+GUARD = INTEGRITY + """
+if not valid() then return -5 end
+if ARGV[4] == '1' or redis.call('GET', KEYS[6]) ~= ARGV[3] then return -1 end
+if redis.call('EXISTS', KEYS[7]) == 1 then return -2 end
+if ARGV[5] == '0' then return 1 end
+local failures = redis.call('HVALS', KEYS[10])
+for _,value in ipairs(failures) do if value == 'BudgetExhausted' then return -3 end end
+if #failures > 0 then return -4 end
+local phase = redis.call('HGET', KEYS[8], 'phase')
+if phase ~= 'rendezvous' and phase ~= 'running' then return -6 end
+local t = redis.call('TIME')
+local now = tonumber(t[1]) + tonumber(t[2])/1000000
+local finish = tonumber(redis.call('HGET', KEYS[8], 'deadline'))
+local heartbeat = tonumber(redis.call('HGET', KEYS[8], 'heartbeat'))
+local window = tonumber(ARGV[7])
+if phase == 'running' then
+  if not finish or now >= finish then return -7 end
+  if not heartbeat or now-heartbeat > window then return -8 end
+  local workers = redis.call('HVALS', KEYS[9])
+  if #workers ~= tonumber(ARGV[6]) then return -9 end
+  for _,value in ipairs(workers) do
+    local at = tonumber(value)
+    if not at or now-at > window then return -9 end
+  end
+elseif not finish or not heartbeat or now > finish or now-heartbeat > window then
+  return -10
+end
+return 1
+"""
+USAGE = INTEGRITY + """
+if not valid() then return -5 end
+return redis.call('HMGET', KEYS[1], 'requests', 'bytes', 'next')
+"""
+
 INITIALIZE = """
 for _,key in ipairs(KEYS) do if redis.call('EXISTS', key) == 1 then return 0 end end
 redis.call('HSET', KEYS[1], 'incarnation', ARGV[1], 'identity', ARGV[2], 'requests', ARGV[3], 'bytes', ARGV[4], 'next', ARGV[5],
@@ -233,7 +268,10 @@ class Coordinator:
 
     def evaluate(self, script, *args, extra_keys=()):
         keys = self.keys + list(extra_keys)
-        result = self.redis.eval(script, len(keys), *keys, self.incarnation, self.identity, *args)
+        try:
+            result = self.redis.eval(script, len(keys), *keys, self.incarnation, self.identity, *args)
+        except (ResponseError, AuthenticationError):
+            raise CampaignError("Redis run integrity unavailable") from None
         if result == -5 or (isinstance(result, list) and result[0] == -5):
             raise CampaignError("Redis run integrity lost; reinitialization is forbidden")
         return result
@@ -259,27 +297,25 @@ class Coordinator:
         return self.retry(self._guard)
 
     def _guard(self):
-        self.integrity()
-        if self.lost or self.redis.get(self.target) != self.token:
-            raise Aborted("target lease lost")
-        if self.redis.exists(self.prefix + ":stop"):
-            raise Aborted("distributed stop requested")
-        if self.session:
-            failures = self.redis.hvals(self.session + ":failures")
-            if "BudgetExhausted" in failures:
-                raise BudgetExhausted("worker exhausted global budget before workload completed")
-            if failures:
-                raise CampaignError("distributed worker reported failure; inspect worker outcomes")
-            data = self.redis.hgetall(self.session)
-            if data.get("phase") not in ("rendezvous", "running"):
-                raise Aborted("master session ended")
-            now = self.now()
-            if data.get("phase") == "running":
-                check_health(float(data.get("heartbeat", 0)),
-                             [float(t) for t in self.redis.hvals(self.session + ":workers")],
-                             self.m.coordination.expected_workers, float(data["deadline"]), now,self.heartbeat_seconds)
-            elif now > float(data["deadline"]) or now - float(data.get("heartbeat", 0)) > self.heartbeat_seconds:
-                raise Aborted("master rendezvous timeout or heartbeat missing")
+        session = self.session or self.prefix + ':no-session'
+        result = self.evaluate(GUARD, self.token, int(self.lost), int(bool(self.session)),
+            self.m.coordination.expected_workers, self.heartbeat_seconds,
+            extra_keys=(self.target, self.prefix + ':stop', session,
+                        session + ':workers', session + ':failures'))
+        failures = {
+            -1: (Aborted, "target lease lost"),
+            -2: (Aborted, "distributed stop requested"),
+            -3: (BudgetExhausted, "worker exhausted global budget before workload completed"),
+            -4: (CampaignError, "distributed worker reported failure; inspect worker outcomes"),
+            -6: (Aborted, "master session ended"),
+            -7: (Aborted, "distributed hard deadline reached"),
+            -8: (Aborted, "master heartbeat missing"),
+            -9: (Aborted, "expected worker heartbeat missing or unexpected worker count"),
+            -10: (Aborted, "master rendezvous timeout or heartbeat missing"),
+        }
+        if result != 1:
+            kind, message = failures.get(result, (CampaignError, "invalid distributed guard result"))
+            raise kind(message)
 
     def check(self):
         self.guard()
@@ -343,9 +379,8 @@ class Coordinator:
             self.retry(lambda:self.redis.zrem(self.prefix + ":inflight", ticket))
 
     def usage(self):
-        self.integrity()
-        data = self.retry(lambda:self.redis.hgetall(self.keys[0]))
-        return {"requests": int(data["requests"]), "bytes": int(data["bytes"]), "next": float(data["next"])}
+        requests, size, next_at = self.retry(lambda: self.evaluate(USAGE))
+        return {"requests": int(requests), "bytes": int(size), "next": float(next_at)}
 
     def claim(self, key, worker):
         return bool(self.retry(lambda:self.evaluate(CLAIM, key, worker)))

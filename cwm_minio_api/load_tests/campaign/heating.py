@@ -7,8 +7,8 @@ import time
 import uuid
 
 from .budget import BudgetExhausted
-from .config import Aborted, CampaignError, Inconclusive
-from .tier import TierStages, is_storage_class
+from .config import Aborted, CampaignError, Inconclusive, heat_timeout
+from .tier import TierStages
 
 
 def validate_task(m, rec):
@@ -63,7 +63,8 @@ def import_receipts(m,state,tasks,receipts):
         state.observe('heat',role,rec,'gate',r['gate'],r['finished'])
 
 
-def master_heat(store,coord):
+def master_heat(store,coord,heat_timeout_seconds=None):
+    duration = heat_timeout(store.m.limits.duration_seconds if heat_timeout_seconds is None else heat_timeout_seconds)
     if not coord:raise CampaignError('distributed heating requires coordination')
     tier=TierStages(store);tier.start('heat')
     for role in ('cold','quiet','expiry'):
@@ -73,7 +74,7 @@ def master_heat(store,coord):
     if store.state.get('session_stage') == 'heat' and store.state.get('session'):
         raise Inconclusive('retained heating session requires explicit recovery; implicit heating replay refused')
     session=coord.begin('heat');started=coord.now()
-    end=started+store.m.coordination.rendezvous_seconds+store.m.limits.duration_seconds
+    end=started+store.m.coordination.rendezvous_seconds+duration
     coord.heat_initialize([json.dumps(r) for r in tasks],started,end)
     result=None
     try:
@@ -97,7 +98,7 @@ def master_heat(store,coord):
         import_receipts(store.m,store.state,tasks,receipts)
         result=dict(heated_objects=len(tasks),workers=store.m.coordination.expected_workers,
                     heating_gets_per_key=max(4,store.m.tier.high_threshold+1),
-                    version_specific_cold_reads_per_key=1,session=session)
+                    version_specific_cold_reads_per_key=1,session=session,heat_timeout_seconds=duration)
         return result
     finally:
         coord.retry(lambda:coord.redis.hset(session,mapping={'phase':'ended','heat_status':'passed' if result else 'failed'}))
@@ -160,9 +161,6 @@ def worker_heat(bundle,m,data,worker,state_dir,session):
         nonlocal completed
         try:
             validate_task(m,rec)
-            head=store.head(rec,current=True)
-            if not is_storage_class(head,m.tier.storage_class) or head.get('Restore'):
-                raise CampaignError('distributed heating requires confirmed cold current version')
             tier.heat_object(rec,True)
             metadata=state.get('metadata:'+rec['op']);gate=state.get('gate:heat:'+rec['op'])
             receipt=dict(op=rec['op'],version_id=rec['version_id'],finished=gate['ts'],

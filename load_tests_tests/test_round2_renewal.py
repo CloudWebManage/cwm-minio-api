@@ -205,7 +205,7 @@ def test_r3_completed_proof_for_different_initial_restore_is_not_reused(manifest
 def test_72h_renewal_combined_branches(manifest_data, include_current, source):
     tier, s3, clock = setup(manifest_data, tier_changes={"low_hours": 72, "high_hours": 72,
         "high_include_current": include_current, "restore_days": 1, "poll_seconds": 60, "timeout_seconds": 200000})
-    clock.now -= 300
+    clock.now -= 900  # Leave room for bounded read retries within this UTC hour.
     tier.cold()
     tier.heat()
     for role in ("cold", "expiry"):

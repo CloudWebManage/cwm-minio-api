@@ -310,7 +310,14 @@ campaign archive "$M"
   satisfy a gate.
 * `heat` performs a version-specific cold GET, then `max(4, high_threshold+1)`
   complete logical-key GETs per cold/expiry key in the **same UTC current hour**.
-  Insufficient room before an hour boundary is inconclusive, not a false pass.
+  Before starting a key, it reserves room for each bounded GET retry envelope
+  and the final HEAD. Near an hour boundary it waits with stop/deadline checks,
+  then confirms the exact current object is still cold before its first GET.
+  Crossing an hour after starting a key is inconclusive; partial heating is never
+  replayed automatically. Distributed `stage`/`run --master` accepts
+  `--heat-timeout-seconds 7200` (1..86400) to extend the heat duration independently
+  of the immutable manifest traffic duration. The default remains the manifest
+  duration; rendezvous is additional, and the outer job deadline still applies.
   With `high_include_current: false`, those reads enter the completed-hour high
   window at the next UTC hour; restore confirmation waits for that eligibility.
   `high_hours` controls the recorded retention window, not the number of heating GETs.

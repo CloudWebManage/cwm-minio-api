@@ -7,7 +7,7 @@ from botocore.config import Config
 from botocore.exceptions import (ClientError, ConnectionClosedError, ConnectTimeoutError,
                                  EndpointConnectionError, ReadTimeoutError, ResponseStreamingError)
 
-from .config import Aborted, CampaignError, Inconclusive, TransientFailure
+from .config import READ_RECOVERY_SECONDS, Aborted, CampaignError, Inconclusive, TransientFailure
 from .budget import BudgetExhausted
 from .timing import deadline, sleep_checked
 
@@ -69,7 +69,7 @@ class ObjectStore:
             return self._call_once(operation, size=size, expected=expected, validate=validate,
                                    before=before, body_factory=body_factory, **kwargs)
         unavailable = TransientFailure(f"{operation}: transient read recovery exhausted")
-        with deadline(120, self.check_stop, unavailable):
+        with deadline(READ_RECOVERY_SECONDS, self.check_stop, unavailable):
             for attempt in range(5):
                 try:
                     result = self._call_once(operation, size=size, expected=expected, validate=validate,

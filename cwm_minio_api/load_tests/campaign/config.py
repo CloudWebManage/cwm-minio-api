@@ -25,6 +25,17 @@ class Aborted(CampaignError):
     pass
 
 
+# Safe GET/HEAD retry envelopes also bound admission to one UTC heating hour.
+READ_RECOVERY_SECONDS = 120
+
+
+def heat_timeout(value):
+    """Validate a runtime heat timeout without altering the immutable manifest."""
+    if type(value) is not int or not 1 <= value <= 86400:
+        raise ValueError("heat timeout must be an integer in [1, 86400] seconds")
+    return value
+
+
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 

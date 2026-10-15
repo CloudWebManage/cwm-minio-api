@@ -58,7 +58,8 @@ def test_successful_worker_receipt_import_preserves_quiet_cohort():
 
 @pytest.mark.skipif(not __import__('os').getenv('CAMPAIGN_TEST_REDIS_URL'),reason='disposable Redis not configured')
 @pytest.mark.parametrize('corrupt',[False,True])
-def test_four_workers_heat_exact_versions_with_real_shared_redis(manifest_data,tmp_path,monkeypatch,corrupt):
+@pytest.mark.parametrize('heat_timeout', [None, 7200])
+def test_four_workers_heat_exact_versions_with_real_shared_redis(manifest_data,tmp_path,monkeypatch,corrupt,heat_timeout):
     import os
     import uuid
     import base64
@@ -92,6 +93,11 @@ def test_four_workers_heat_exact_versions_with_real_shared_redis(manifest_data,t
     data=dict(runtime=dict(endpoint='http://disposable:9000',access_key='synthetic',secret_key='synthetic'),redis_url=os.environ['TEST_REDIS'],incarnation=coord.incarnation)
     store.budget=coord;store.guard=coord.guard
     futures=[];begin=coord.begin
+    initialize=coord.heat_initialize
+    def capture_deadline(tasks,started,end):
+        assert end-started == (25 if heat_timeout is None else 7205)
+        return initialize(tasks,started,end)
+    monkeypatch.setattr(coord,'heat_initialize',capture_deadline)
     buckets=copy.deepcopy(s3.buckets)
     for bucket in buckets.values():
         for versions in bucket.values():
@@ -120,7 +126,7 @@ def test_four_workers_heat_exact_versions_with_real_shared_redis(manifest_data,t
         monkeypatch.setattr(coord,'begin',start)
         if corrupt:
             with pytest.raises(CampaignError,match='worker'):
-                master_heat(store,coord)
+                master_heat(store,coord,heat_timeout_seconds=heat_timeout)
             for future in futures:
                 with pytest.raises(RuntimeError):future.result(timeout=10)
             for role in ('cold','expiry'):
@@ -129,7 +135,7 @@ def test_four_workers_heat_exact_versions_with_real_shared_redis(manifest_data,t
             state.close()
             return
         try:
-            details=master_heat(store,coord)
+            details=master_heat(store,coord,heat_timeout_seconds=heat_timeout)
         except Exception:
             for future in futures:
                 try:future.result(timeout=5)

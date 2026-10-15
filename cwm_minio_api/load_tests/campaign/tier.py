@@ -2,7 +2,7 @@
 import math
 import time
 
-from .config import Aborted, CampaignError, Inconclusive, TransientFailure
+from .config import READ_RECOVERY_SECONDS, Aborted, CampaignError, Inconclusive, TransientFailure
 from .control import assert_tier_versioning
 from .timing import deadline, sleep_checked
 
@@ -113,28 +113,54 @@ class TierStages:
                 "rules_source": "operator-supplied; not server configuration introspection"}
 
     def heating_bound(self, count):
-        return count * (self.store.io_timeout + 1 / self.m.limits.rps) + 1
+        # Every GET can use its full safe-read recovery envelope, followed by
+        # a metadata HEAD. The hour deadline below remains the hard bound.
+        return (count + 1) * READ_RECOVERY_SECONDS + count / self.m.limits.rps + 1
 
     def heat_object(self, rec, initial):
         count = max(4, self.tier.high_threshold + 1)
-        now = self.clock()
-        if 3600 - now % 3600 <= self.heating_bound(count + int(initial)):
-            raise Inconclusive("insufficient current-hour heating window")
-        hour = int(now // 3600)
-        if initial:
-            self.store.get(rec)
-        for _ in range(count):
+        bound = self.heating_bound(count + int(initial))
+        if bound >= 3600:
+            raise Inconclusive("heating retry envelope cannot fit within one UTC hour")
+        while True:
             self.check()
-            self.sample_quiet()
-            self.store.get(rec, current=True)
-        if int(self.clock() // 3600) != hour:
-            raise Inconclusive("heating crossed current-hour window")
-        eligible = now if self.tier.high_include_current else (hour + 1) * 3600
-        self.head(rec)  # Capture an ongoing restore that might begin immediately.
-        self.gate("heat" if initial else "renewal-heat", rec, started=now, utc_hour=hour,
-                  high_hours=self.tier.high_hours, high_include_current=self.tier.high_include_current,
-                  eligible_at=eligible, window_expires_at=(hour + self.tier.high_hours + (not self.tier.high_include_current)) * 3600,
-                  current_gets=count, version_gets=int(initial))
+            now = self.clock()
+            if 3600 - now % 3600 <= bound:
+                # No GET has happened for this object. Waiting is safe; replaying
+                # a partly heated object after crossing an hour is not.
+                def check_wait():
+                    self.check()
+                    self.sample_quiet()
+                sleep_checked(3600 - now % 3600, check_wait, clock=self.clock, sleep=self.sleep)
+                continue
+            if initial:
+                head = self.head(rec)
+                if not is_storage_class(head, self.tier.storage_class) or head.get("Restore"):
+                    raise CampaignError("heating requires a confirmed cold current version")
+            now = self.clock()
+            if 3600 - now % 3600 > bound:
+                break
+        hour = int(now // 3600)
+        crossed = Inconclusive("heating crossed current-hour window; partial heating is not replayed")
+        def check_hour():
+            self.check()
+            if int(self.clock() // 3600) != hour:
+                raise crossed
+        with deadline((hour + 1) * 3600 - now, check_hour, crossed):
+            if initial:
+                self.store.get(rec)
+            for _ in range(count):
+                self.sample_quiet()
+                check_hour()
+                self.store.get(rec, current=True)
+            check_hour()
+            eligible = now if self.tier.high_include_current else (hour + 1) * 3600
+            self.head(rec)  # Capture an ongoing restore that might begin immediately.
+            check_hour()
+            self.gate("heat" if initial else "renewal-heat", rec, started=now, utc_hour=hour,
+                      high_hours=self.tier.high_hours, high_include_current=self.tier.high_include_current,
+                      eligible_at=eligible, window_expires_at=(hour + self.tier.high_hours + (not self.tier.high_include_current)) * 3600,
+                      current_gets=count, version_gets=int(initial))
 
     def heat(self):
         self.start("heat")
@@ -143,9 +169,6 @@ class TierStages:
                 self.prerequisite("cold", rec)
         for role in ("cold", "expiry"):
             for rec in self.records(role):
-                head = self.head(rec)
-                if not is_storage_class(head, self.tier.storage_class) or head.get("Restore"):
-                    raise CampaignError("heating requires a confirmed cold current version")
                 self.heat_object(rec, True)
         self.sample_quiet(force=True)
         return {"heating_gets_per_key": max(4, self.tier.high_threshold + 1), "version_specific_cold_reads_per_key": 1,

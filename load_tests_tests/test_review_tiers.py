@@ -75,7 +75,7 @@ def setup(manifest_data, seed_data=True, tier_changes=None, objects=1):
 
 def restored_cycle(tier, s3, clock):
     # Heating needs room within the current UTC hour, then renewal crosses a day.
-    clock.now -= 300
+    clock.now -= 900  # Leave room for bounded read retries within this UTC hour.
     tier.cold()
     tier.heat()
     for role in ("cold", "expiry"):
@@ -85,7 +85,7 @@ def restored_cycle(tier, s3, clock):
     tier.restore()
     s3.restoring.clear()
     # Delay still allows expiry extension at the next calendar boundary.
-    tier.tier = tier.tier.model_copy(update={"timeout_seconds": 600})
+    tier.tier = tier.tier.model_copy(update={"timeout_seconds": 1200})
 
 
 @pytest.mark.parametrize("stage", ["cold", "heat", "restore", "renew", "expiry", "observe"])
@@ -155,7 +155,7 @@ def test_production_high_window_schema_is_explicit_and_restore_default_is_one(ma
 
 def test_production_window_excluding_current_waits_for_hour_eligibility(manifest_data):
     tier, s3, clock = setup(manifest_data, tier_changes={"high_hours": 72, "high_include_current": False, "timeout_seconds": 4000})
-    clock.now -= 300
+    clock.now -= 900  # Leave room for bounded read retries within this UTC hour.
     tier.cold()
     tier.heat()
     expected_eligible = 101 * 86400
