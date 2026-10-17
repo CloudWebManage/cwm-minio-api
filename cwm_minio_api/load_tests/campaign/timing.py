@@ -33,17 +33,12 @@ def deadline(seconds, check=lambda: None, error=None):
             old_handler = signal.getsignal(signal.SIGALRM)
             old_timer = signal.getitimer(signal.ITIMER_REAL)
             started = time.monotonic()
-            checking = False
+            # Signals can interrupt Redis or other code holding non-reentrant
+            # locks. Only enforce time here; run check() cooperatively in normal
+            # control flow (entry, operation boundaries and sleep_checked).
             def alarm(*_):
-                nonlocal checking
                 if time.monotonic() >= end:
                     raise error
-                if not checking:
-                    checking = True
-                    try:
-                        check()
-                    finally:
-                        checking = False
             signal.signal(signal.SIGALRM, alarm)
             signal.setitimer(signal.ITIMER_REAL, min(0.1, remaining), min(0.1, remaining))
             try:
