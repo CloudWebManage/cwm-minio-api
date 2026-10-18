@@ -101,13 +101,19 @@ class HeatObserver:
             if now < self.next_poll.get(rec['op'], 0):
                 self.pending.append(rec)
                 continue
+            before = self.tier.state.get('metadata:' + rec['op'])
             try:
                 with deadline(min(2, self.end - now), self.coord.guard,
                               TransientFailure('heating observation sample unavailable')):
                     head = self.tier.head(rec)
             except TransientFailure:
-                # TierStages records the unavailable interval. A later sample
-                # may establish ongoing state; absence never becomes a pass.
+                # Native outer deadlines can interrupt safe-read backoff before
+                # TierStages records its gap. Ensure that the sample always has
+                # durable evidence without duplicating an inner unavailable row.
+                after = self.tier.state.get('metadata:' + rec['op'])
+                if after == before or not after or after['value'].get('state') != 'unavailable':
+                    self.tier.state.observe(self.tier.stage, rec['bucket'].rsplit('-', 1)[1],
+                        rec, 'head', {'state': 'unavailable'}, self.tier.clock())
                 head = {}
             self.next_poll[rec['op']] = self.coord.now() + max(1, self.tier.tier.poll_seconds)
             if not head.get('Restore'):
