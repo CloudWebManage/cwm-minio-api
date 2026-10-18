@@ -5,7 +5,7 @@ from contextlib import nullcontext
 import botocore.session
 from botocore.config import Config
 from botocore.exceptions import (ClientError, ConnectionClosedError, ConnectTimeoutError,
-                                 EndpointConnectionError, ReadTimeoutError, ResponseStreamingError)
+                                 EndpointConnectionError, HTTPClientError, ReadTimeoutError, ResponseStreamingError)
 
 from .config import READ_RECOVERY_SECONDS, Aborted, CampaignError, Inconclusive, TransientFailure
 from .budget import BudgetExhausted
@@ -16,7 +16,26 @@ SAFE_READS = frozenset({"head_bucket", "head_object", "get_bucket_versioning",
                        "list_object_versions", "list_multipart_uploads", "list_objects_v2"})
 
 
+def _http_error_chain(exc):
+    # botocore's HTTP transport wraps campaign deadlines in this exact SDK
+    # exception. Do not follow arbitrary causes or unwrap specialized errors.
+    chain, seen = [], set()
+    for _ in range(8):
+        if id(exc) in seen:
+            break
+        seen.add(id(exc))
+        chain.append(exc)
+        if type(exc) is not HTTPClientError:
+            break
+        nested = exc.kwargs.get("error")
+        if not isinstance(nested, BaseException):
+            break
+        exc = nested
+    return chain
+
+
 def transient(exc):
+    exc = _http_error_chain(exc)[-1]
     if isinstance(exc, (TransientFailure, ConnectionClosedError, ConnectTimeoutError,
                         EndpointConnectionError, ReadTimeoutError, ResponseStreamingError, ConnectionError, TimeoutError)):
         return True
@@ -39,6 +58,14 @@ def client(manifest, runtime):
 
 
 def code(exc):
+    if type(exc) is HTTPClientError:
+        # Only exception classes enter metrics/receipts; SDK messages can
+        # contain endpoints, credentials or response bodies.
+        names = []
+        for nested in _http_error_chain(exc):
+            name = type(nested).__name__
+            names.append(name if name.isidentifier() and name.isascii() and len(name) < 80 else "Exception")
+        return ":".join(names)
     if isinstance(exc, ClientError):
         raw = str(exc.response.get("Error", {}).get("Code", "S3Error"))
         return raw if raw.isalnum() and len(raw) < 80 else "S3Error"
