@@ -5,10 +5,12 @@ import re
 import threading
 import time
 import uuid
+from collections import deque
 
 from .budget import BudgetExhausted
-from .config import Aborted, CampaignError, Inconclusive, heat_timeout
+from .config import Aborted, CampaignError, Inconclusive, TransientFailure, heat_timeout
 from .tier import TierStages
+from .timing import deadline
 
 
 def validate_task(m, rec):
@@ -63,6 +65,55 @@ def import_receipts(m,state,tasks,receipts):
         state.observe('heat',role,rec,'gate',r['gate'],r['finished'])
 
 
+class HeatObserver:
+    """Bounded metadata sampling while other workers are still heating.
+
+    Sampling is evidence, not a guarantee of seeing arbitrarily short restore
+    transitions. Missing ongoing evidence still fails the later restore gate.
+    """
+    def __init__(self, tier, coord, session, tasks, end):
+        self.tier, self.coord, self.session, self.end = tier, coord, session, end
+        self.tasks = {rec['op']: rec for rec in tasks}
+        self.cursor = 0
+        self.seen = set()
+        self.pending = deque()
+        self.next_poll = {}
+
+    def sample(self):
+        self.coord.guard()
+        self.cursor, claims = self.coord.retry(lambda: self.coord.redis.hscan(
+            self.session + ':heat-claims', cursor=self.cursor, count=16))
+        for raw in claims.values():
+            rec = json.loads(raw)
+            if self.tasks.get(rec.get('op')) != rec:
+                raise CampaignError('foreign task in heating observation allocation')
+            if rec['op'] not in self.seen:
+                self.seen.add(rec['op'])
+                self.pending.append(rec)
+        # A slow or unavailable HEAD cannot monopolize the controller. The
+        # standard safe-read retry loop operates within this smaller sample cap.
+        for _ in range(min(4, len(self.pending))):
+            rec = self.pending.popleft()
+            now = self.coord.now()
+            if now >= self.end:
+                self.pending.appendleft(rec)
+                return
+            if now < self.next_poll.get(rec['op'], 0):
+                self.pending.append(rec)
+                continue
+            try:
+                with deadline(min(2, self.end - now), self.coord.guard,
+                              TransientFailure('heating observation sample unavailable')):
+                    head = self.tier.head(rec)
+            except TransientFailure:
+                # TierStages records the unavailable interval. A later sample
+                # may establish ongoing state; absence never becomes a pass.
+                head = {}
+            self.next_poll[rec['op']] = self.coord.now() + max(1, self.tier.tier.poll_seconds)
+            if not head.get('Restore'):
+                self.pending.append(rec)
+
+
 def master_heat(store,coord,heat_timeout_seconds=None):
     duration = heat_timeout(store.m.limits.duration_seconds if heat_timeout_seconds is None else heat_timeout_seconds)
     if not coord:raise CampaignError('distributed heating requires coordination')
@@ -76,6 +127,7 @@ def master_heat(store,coord,heat_timeout_seconds=None):
     session=coord.begin('heat');started=coord.now()
     end=started+store.m.coordination.rendezvous_seconds+duration
     coord.heat_initialize([json.dumps(r) for r in tasks],started,end)
+    observer=HeatObserver(tier,coord,session,tasks,end)
     result=None
     try:
         rendezvous=started+store.m.coordination.rendezvous_seconds
@@ -88,6 +140,7 @@ def master_heat(store,coord,heat_timeout_seconds=None):
         coord.retry(lambda:coord.redis.hset(session,'phase','running'))
         while coord.retry(lambda:coord.redis.hlen(session+':heat-receipts'))<len(tasks):
             coord.guard();tier.sample_quiet()
+            observer.sample()
             if coord.now()>=end:raise Inconclusive('distributed heating deadline reached; partial heating is not replayed')
             time.sleep(.2)
         coord.guard();tier.sample_quiet(force=True)
