@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "run_id": "campaign-dist-001",
+  "state_dir": "/var/tmp/cwm-campaign/campaign-dist-001",
+  "seed": 17,
+  "target": {
+    "mode": "cwm-api",
+    "endpoint_env": "CAMPAIGN_S3_ENDPOINT",
+    "api_url_env": "CAMPAIGN_API_URL",
+    "api_username_env": "CAMPAIGN_API_USERNAME",
+    "api_password_env": "CAMPAIGN_API_PASSWORD"
+  },
+  "limits": {
+    "users": 4,
+    "inflight": 4,
+    "rps": 50,
+    "requests": 50000,
+    "bytes": 1073741824,
+    "duration_seconds": 30,
+    "versions_per_key": 8
+  },
+  "dataset": {"objects": 1000, "sizes": [1024, 65536]},
+  "coordination": {
+    "redis_url_env": "CAMPAIGN_REDIS_URL",
+    "dedicated": true,
+    "expected_workers": 2,
+    "rendezvous_seconds": 60
+  }
+}

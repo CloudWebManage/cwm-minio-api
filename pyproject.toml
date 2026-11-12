@@ -5,15 +5,20 @@ description = "CWM MinIO API"
 requires-python = ">=3.12"
 dependencies = [
     "asyncclick>=8.1.8",
+    "botocore>=1.42.35",
     "click>=8.2.1",
     "fastapi[standard]>=0.116.1",
+    "gevent>=25.9.1",
+    "locust>=2.43.1",
     "orjson>=3.11.1",
     "prometheus-client>=0.20.0",
     "psycopg[binary,pool]>=3.2.9",
     "python-dotenv>=1.1.1",
+    "redis>=7.1.0",
     "requests>=2.32.5",
     "uvicorn>=0.35.0",
     "uvicorn-worker>=0.3.0",
+    "xlsxwriter>=3.2.9",
 ]
 
 [dependency-groups]
@@ -33,6 +38,7 @@ load-test = [
     "botocore>=1.42.35",
     "locust>=2.43.1",
     "redis>=7.1.0",
+    "xlsxwriter>=3.2.9",
 ]
 
 [tool.pytest.ini_options]

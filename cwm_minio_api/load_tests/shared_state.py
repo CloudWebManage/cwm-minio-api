@@ -67,8 +67,18 @@ class SharedState:
     def clear(self):
         if not config.CWM_KEEP_REDIS_DATA:
             self.debug('Clearing shared state in Redis...')
-            self.redis.flushdb()
+            self._clear_namespace()
             self.debug('Shared state cleared.')
+
+    def _clear_namespace(self):
+        batch = []
+        for key in self.redis.scan_iter(match=f'{self.key_prefix}:*', count=1000):
+            batch.append(key)
+            if len(batch) == 1000:
+                self.redis.unlink(*batch)
+                batch.clear()
+        if batch:
+            self.redis.unlink(*batch)
 
     def get_timestamp(self):
         return int(time.time())
@@ -87,7 +97,7 @@ class SharedState:
     # this method runs once from the master locustfile and initializes this mode of operation
     def init_from_json_file_only_instance_buckets(self):
         self.debug('Initializing shared state from JSON file (only instances and buckets, files will be updated from MinIO)...')
-        self.redis.flushdb()
+        self._clear_namespace()
         self.update_from_file(config.CWM_INIT_FROM_JSON_FILE)
         self.instance_bucket_files = {}
         num_instances = 0

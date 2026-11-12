@@ -25,10 +25,7 @@ def generate_bucket_name(public):
 
 
 def download_from_bucket_filename_pre_return_hook(res):
-    if res.status_code == 404:
-        # file downloaded while deleted
-        res.success()
-    elif 200 <= res.status_code < 300:
+    if 200 <= res.status_code < 300:
         res.success()
     else:
         res.failure(f'unexpected status code {res.status_code} {res.text}')
@@ -125,7 +122,7 @@ class BaseUser(FastHttpUser):
         instance = json.loads(res_text)
         self.instance_access_key = instance["access_key"]
         self.instance_secret_key = instance["secret_key"]
-        logging.info(f'Instance created: {self.instance_id} (access_key={self.instance_access_key} secret_key={self.instance_secret_key})')
+        logging.info(f'Instance created: {self.instance_id}')
         self.shared_state.add_instance(self.instance_id, self.instance_access_key, self.instance_secret_key)
 
     def create_bucket(self, public=False):
